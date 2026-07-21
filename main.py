@@ -334,19 +334,22 @@ def run_query_pipeline(
     answer: bool = False,
     relevance_threshold: float = 0.20,
     on_line=None,
+    weaviate_client=None,
 ) -> dict:
     """Programmatic query entry point used by the Streamlit UI."""
     emit = on_line or (lambda _line: None)
 
     emit(f"[phase 1/3] retrieve with {embed_model}")
     embedder = Embedder(model_name=embed_model, host=host)
-    wv_client = weaviate.connect_to_local()
+    owns_weaviate_client = weaviate_client is None
+    wv_client = weaviate_client or weaviate.connect_to_local()
     try:
         wv_collection = wv_client.collections.get(collection)
         candidates = retrieve(wv_collection, embedder, query, retrieve_k, alpha)
     finally:
         embedder.close()
-        wv_client.close()
+        if owns_weaviate_client:
+            wv_client.close()
     emit(f"retrieved {len(candidates)} candidates")
     del embedder
     gc.collect()
