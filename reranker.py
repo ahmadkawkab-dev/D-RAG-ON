@@ -1,0 +1,122 @@
+"""
+reranker.py
+===========
+Cross-encoder-style reranker for Qwen3-Reranker, loaded directly from
+Hugging Face via `transformers` and run locally on GPU — no Ollama
+involved for this step.
+
+Unlike the earlier Ollama-based version (which asked a chat model to
+self-report a 0-10 score), this reads the model's raw "yes"/"no" token
+logits at the last position and turns them into a probability. That's
+the scoring method the Qwen3-Reranker model card itself recommends, and
+it's more precise than asking a model to grade itself in text.
+
+Requires: pip install transformers torch accelerate
+Model weights (e.g. Qwen/Qwen3-Reranker-4B) are pulled from Hugging Face
+the first time you run this and cached under ~/.cache/huggingface.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Sequence
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+logger = logging.getLogger("reranker")
+
+_SYSTEM_PROMPT = (
+    'Judge whether the Document meets the requirements based on the '
+    'Query and the Instruct provided. Note that the answer can only '
+    'be "yes" or "no".'
+)
+_DEFAULT_INSTRUCTION = "Given a search query, retrieve relevant passages that answer the query"
+_MAX_LENGTH = 8192
+
+
+class Reranker:
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-Reranker-4B",
+        device: str | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        self.model_name = model_name
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # CPUs usually handle float32 better, while GPUs can use bfloat16 to save memory.
+        if dtype is None:
+            dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+        logger.info("Loading reranker '%s' onto %s (dtype=%s)", model_name, self.device, dtype)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
+        self.model = (
+            AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+            .to(self.device)
+            .eval()
+        )
+
+        self.token_false_id = self.tokenizer.convert_tokens_to_ids("no")
+        self.token_true_id = self.tokenizer.convert_tokens_to_ids("yes")
+
+        prefix = f"<|im_start|>system\n{_SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n"
+        suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        self._prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
+        self._suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
+
+    @staticmethod
+    def _format_pair(query: str, passage: str, instruction: str) -> str:
+        return f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {passage}"
+
+    def _process_inputs(self, pairs: list[str]) -> dict:
+        budget = _MAX_LENGTH - len(self._prefix_tokens) - len(self._suffix_tokens)
+        inputs = self.tokenizer(
+            pairs,
+            padding=False,
+            truncation="longest_first",
+            return_attention_mask=False,
+            max_length=budget,
+        )
+        for i, ids in enumerate(inputs["input_ids"]):
+            inputs["input_ids"][i] = self._prefix_tokens + ids + self._suffix_tokens
+        inputs = self.tokenizer.pad(inputs, padding=True, return_tensors="pt", max_length=_MAX_LENGTH)
+        return {k: v.to(self.device) for k, v in inputs.items()}
+
+    @torch.no_grad()
+    def _score_batch(self, pairs: list[str]) -> list[float]:
+        inputs = self._process_inputs(pairs)
+        logits = self.model(**inputs).logits[:, -1, :]
+        true_scores = logits[:, self.token_true_id]
+        false_scores = logits[:, self.token_false_id]
+        stacked = torch.stack([false_scores, true_scores], dim=1)
+        log_probs = torch.nn.functional.log_softmax(stacked, dim=1)
+        return log_probs[:, 1].exp().tolist()
+
+    def score(self, query: str, passage: str, instruction: str = _DEFAULT_INSTRUCTION) -> float:
+        """Relevance probability in [0, 1] for a single (query, passage) pair."""
+        return self._score_batch([self._format_pair(query, passage, instruction)])[0]
+
+    def rerank(
+        self,
+        query: str,
+        candidates: Sequence[dict],
+        top_n: int = 5,
+        instruction: str = _DEFAULT_INSTRUCTION,
+        batch_size: int = 8,
+    ) -> list[dict]:
+        """
+        candidates: list of dicts each containing at least a "text" key.
+        Returns the top_n candidates, each with an added "rerank_score"
+        key (0-1 relevance probability), sorted highest first.
+        """
+        pairs = [self._format_pair(query, c["text"], instruction) for c in candidates]
+
+        scores: list[float] = []
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i : i + batch_size]
+            logger.debug("Scoring batch %d-%d of %d", i, i + len(batch), len(pairs))
+            scores.extend(self._score_batch(batch))
+
+        scored = [{**c, "rerank_score": s} for c, s in zip(candidates, scores)]
+        scored.sort(key=lambda c: c["rerank_score"], reverse=True)
+        return scored[:top_n]

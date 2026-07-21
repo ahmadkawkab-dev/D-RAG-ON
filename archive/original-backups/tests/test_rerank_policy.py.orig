@@ -1,0 +1,49 @@
+from rerank_policy import choose_rerank_route, deduplicate_candidates
+
+
+def _ranked(first=0.9, second=0.5, clause=""):
+    return [
+        {"rerank_score": first, "metadata": {"clause_number": clause}},
+        {"rerank_score": second, "metadata": {"clause_number": "9.9"}},
+    ]
+
+
+def test_deduplicate_candidates_uses_normalized_text():
+    candidates = [
+        {"chunk_id": "a", "text": "Same   passage"},
+        {"chunk_id": "b", "text": " same passage "},
+        {"chunk_id": "c", "text": "Different passage"},
+    ]
+    assert [item["chunk_id"] for item in deduplicate_candidates(candidates)] == ["a", "c"]
+
+
+def test_exact_clause_reference_stays_on_fast_path():
+    route = choose_rerank_route(
+        "What does Safeguard 5.3 require?",
+        _ranked(0.78, 0.75, clause="5.3"),
+    )
+    assert route["route"] == "light"
+    assert route["exact_clause_match"] is True
+
+
+def test_clear_result_stays_on_fast_path():
+    assert choose_rerank_route("What is required?", _ranked())["route"] == "light"
+
+
+def test_uncertain_relevant_result_escalates():
+    route = choose_rerank_route("What is required?", _ranked(0.72, 0.69))
+    assert route["route"] == "heavy"
+
+
+def test_comparison_escalates_even_with_a_clear_top_result():
+    route = choose_rerank_route(
+        "Compare account deletion and access review requirements.",
+        _ranked(),
+    )
+    assert route["route"] == "heavy"
+    assert route["complex_query"] is True
+
+
+def test_irrelevant_result_is_rejected_without_escalation():
+    assert choose_rerank_route("Unrelated question", _ranked(0.1, 0.05))["route"] == "reject"
+

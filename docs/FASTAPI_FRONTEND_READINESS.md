@@ -1,0 +1,403 @@
+# FastAPI and Frontend Readiness
+
+## Purpose
+
+This document explains how to add a FastAPI backend for a React, Vite, and
+Tailwind CSS frontend while keeping the existing Streamlit operations console.
+
+The repository is ready for this transition at the service level, but it does
+not yet expose an HTTP API. The safest approach is to keep one shared Python
+service layer and place Streamlit and FastAPI on top of it.
+
+## Readiness summary
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Query pipeline | Ready to reuse | `main.run_query_pipeline()` already returns plain dictionaries. |
+| PDF parsing | Mostly ready | `parsing_workspace.run_pipeline_bytes()` is headless, but its module still imports Streamlit. |
+| Ingestion CLI | Ready to wrap as a job | `main.py ingest` already handles parsing, embedding, and upserting. |
+| Evaluation CLI | Ready to wrap as a job | Evaluations already write progress and JSON artifacts. |
+| Job metadata | Useful foundation | Jobs use JSON metadata, logs, and result files under `.rag_runs/`. |
+| HTTP API | Not implemented | There are no FastAPI routes, request models, CORS rules, or API tests yet. |
+| Concurrency control | Needs work | The current UI can start multiple processes without a global model queue. |
+| Authentication | Not implemented | This is acceptable only for a strictly local deployment. |
+| Streamlit coexistence | Ready | Streamlit can remain the admin and review interface. |
+
+## Recommended architecture
+
+```text
+React / Vite / Tailwind
+        |
+        | HTTP, JSON, multipart uploads, optional SSE
+        v
+FastAPI API
+        |
+        v
+Shared services and job manager
+        |
+        +--> query pipeline
+        +--> parsing and ingestion
+        +--> evaluation
+        +--> golden-set review helpers
+        |
+        +--> Ollama
+        +--> Weaviate
+
+Streamlit
+        |
+        +------> the same shared services and job manager
+```
+
+React and Streamlit should not contain separate copies of retrieval,
+ingestion, or evaluation logic. They should only handle presentation and call
+the same service functions.
+
+## Existing code that can be reused
+
+### Querying
+
+`main.run_query_pipeline()` already accepts query settings, emits progress
+lines, and returns JSON-compatible data containing:
+
+- the original question;
+- ranked chunks and metadata;
+- the grounded answer;
+- the relevance decision and score.
+
+Because model loading is slow and memory-intensive, an HTTP request should not
+run this function directly on the FastAPI event loop. Submit it to the shared
+job manager and return a job ID.
+
+### Parsing
+
+`parsing_workspace.run_pipeline_bytes()` accepts PDF bytes, a file name, and a
+plain configuration dictionary. This is a good future boundary for a multipart
+upload endpoint.
+
+Before using it as a clean API service, move the headless parsing helpers into a
+module that does not import Streamlit. Keep Streamlit caching and rendering in
+`parsing_workspace.py`.
+
+### Ingestion and evaluation
+
+The ingestion and evaluation commands in `main.py` already work without a UI.
+FastAPI can submit those operations through the same worker mechanism used by
+Streamlit.
+
+Do not duplicate their argument-building logic inside API routes. Put request
+validation and command/service construction in shared Python modules first.
+
+### Review and reporting
+
+The normalization and review checks in `json_review_workspace.py` are mostly
+plain Python. Move the reusable checks into a service module and leave upload
+widgets, buttons, and session state in the Streamlit module.
+
+The report builders in `dashboard.py` already provide useful response shapes,
+but they should also move out of the Streamlit module before becoming an API
+contract.
+
+## Suggested backend layout
+
+The exact names can change, but the separation should remain clear:
+
+```text
+api/
+  app.py                 FastAPI application and lifespan
+  dependencies.py        Settings and shared service access
+  schemas/
+    queries.py
+    documents.py
+    jobs.py
+    health.py
+  routes/
+    queries.py
+    documents.py
+    jobs.py
+    health.py
+
+services/
+  query_service.py       Shared query orchestration
+  parsing_service.py     PDF inspection and parsing
+  ingestion_service.py   Parse, embed, and upsert orchestration
+  evaluation_service.py  Benchmark orchestration
+  review_service.py      JSON normalization and golden-set checks
+  report_service.py      Stable response/report builders
+  job_service.py         Job creation, status, logs, and results
+
+app.py                    Existing Streamlit entry point
+main.py                   Existing CLI entry point
+```
+
+FastAPI, Streamlit, and the CLI then become three adapters around the same
+services.
+
+## Suggested API surface
+
+Start with the smallest useful API instead of reproducing every Streamlit page.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/health` | Check API, Ollama, Weaviate, models, and collection. |
+| `POST` | `/api/v1/queries` | Validate a question and create an asynchronous query job. |
+| `GET` | `/api/v1/jobs/{job_id}` | Return job state, progress, timestamps, and errors. |
+| `GET` | `/api/v1/jobs/{job_id}/result` | Return the completed query, parse, ingest, or evaluation result. |
+| `GET` | `/api/v1/jobs/{job_id}/events` | Optional SSE stream for progress and logs. |
+| `POST` | `/api/v1/documents/parse` | Upload and parse PDFs without indexing them. |
+| `POST` | `/api/v1/documents/ingest` | Upload approved PDFs and create an ingestion job. |
+| `GET` | `/api/v1/runs` | List completed and active jobs. |
+
+Add evaluation and golden-set mutation endpoints only if the React application
+really needs those administrative features. Streamlit can remain the safer
+human-review interface.
+
+## Query job contract
+
+A query submission should return `202 Accepted` with a server-generated job
+ID. The frontend can poll the job endpoint or subscribe to SSE.
+
+The API should validate at least:
+
+- a non-empty question with a maximum length;
+- `retrieve_k`, `top_n`, and their relationship;
+- `alpha` between 0 and 1;
+- relevance threshold between 0 and 1;
+- model and collection names against server-approved values;
+- whether answer generation is enabled.
+
+Do not accept arbitrary Ollama hosts, local filesystem paths, commands, or model
+IDs from an untrusted browser. Those choices are currently convenient in the
+local Streamlit console but become server-side request-forgery or command
+execution risks when exposed through an API.
+
+## Background jobs and model safety
+
+The machine is designed to unload one model before loading the next. Preserve
+that rule in the API design.
+
+The job manager should:
+
+1. create an unguessable job ID;
+2. validate and save the request;
+3. place model-heavy work in a global queue;
+4. allow only the configured number of heavy jobs at once;
+5. write progress and results atomically;
+6. record a safe error message and an internal traceback separately;
+7. clean old uploads, logs, and results according to a retention policy.
+
+The current `job_runner.py` must be fixed before it becomes shared
+infrastructure. Its priority code runs after the child command and references a
+local variable outside its scope. Add an end-to-end worker test after fixing it.
+
+For a single local machine, one Python worker and a file-backed job store can be
+enough. For multiple API processes or machines, use a real shared queue and
+database rather than relying on `.rag_runs/`.
+
+## Configuration
+
+Add settings for:
+
+- API host and port;
+- allowed frontend origins;
+- Ollama URL;
+- Weaviate host, HTTP port, and gRPC port;
+- collection name;
+- approved embedding, reranking, answer, and judge models;
+- upload size and page limits;
+- worker concurrency;
+- job retention;
+- authentication mode.
+
+Keep these settings on the server. A Vite frontend should only receive a public
+API base URL such as `VITE_API_BASE_URL`.
+
+## CORS and network exposure
+
+During local development, allow only the actual Vite origin, commonly
+`http://localhost:5173`. Production should use the deployed frontend origin
+and should not use a wildcard when credentials are enabled.
+
+React must never connect directly to Ollama or Weaviate. Keep those services on
+a private interface and expose only FastAPI through the reverse proxy.
+
+The current Compose file enables anonymous Weaviate access. This is reasonable
+for a private local network only. Bind it to localhost or configure
+authentication before any remote deployment.
+
+## Authentication and authorization
+
+No authentication is required if every service is bound to localhost and used
+by one trusted developer.
+
+If the API is reachable by other machines, add authentication before exposing:
+
+- document upload or ingestion;
+- evaluation execution;
+- run logs;
+- golden-set changes;
+- model or collection configuration.
+
+Administrative operations can remain Streamlit-only during the first React
+release.
+
+## Error handling
+
+Map internal failures to stable API errors:
+
+- `400` for malformed requests;
+- `404` for unknown jobs or collections;
+- `409` for duplicate or conflicting work;
+- `413` for oversized uploads;
+- `422` for valid JSON with invalid settings;
+- `503` when Ollama or Weaviate is unavailable.
+
+Do not send tracebacks, local paths, model cache locations, or raw worker
+commands to the browser.
+
+## Testing required before frontend integration
+
+Keep the existing tests and add:
+
+- FastAPI route tests using a test client;
+- request and response schema tests;
+- CORS tests for allowed and rejected origins;
+- query job lifecycle tests;
+- end-to-end job runner tests;
+- upload type and size-limit tests;
+- concurrency tests proving heavy models are serialized;
+- health checks with Ollama or Weaviate unavailable;
+- one live integration test against a test collection;
+- tests confirming Streamlit still starts after service extraction.
+
+The current test suite passing is necessary, but it does not prove the API
+contract or live RAG services.
+
+## Recommended delivery order
+
+### Phase 1: Prepare shared services
+
+- Fix the job runner.
+- Move headless parsing, reports, and review checks out of Streamlit modules.
+- Add shared settings and a global model-work queue.
+- Keep all existing CLI and Streamlit behavior working.
+
+### Phase 2: Add the minimum FastAPI backend
+
+- Add health, query submission, job status, and result endpoints.
+- Add typed schemas, error handling, CORS, and API tests.
+- Verify one real query against Ollama and Weaviate.
+
+At this point, a React assistant screen can be introduced safely.
+
+### Phase 3: Add document workflows
+
+- Add multipart parsing uploads.
+- Add controlled ingestion jobs.
+- Add upload retention and limits.
+- Expose run history and reports.
+
+### Phase 4: Decide on admin parity
+
+Only move evaluation, JSON review, and golden-set curation into React if there
+is a clear product reason. Streamlit is already well suited to these internal
+operations.
+
+## Adaptive reranking and measured latency
+
+Interactive queries now use `Qwen/Qwen3-Reranker-0.6B` as the default fast
+reranker. Retrieved passages are deduplicated before scoring, and only the first
+eight unique candidates are scored on the fast path.
+
+The pipeline escalates to `Qwen/Qwen3-Reranker-4B` when the lightweight result
+is relevant but uncertain, or when the question asks for comparison or synthesis
+across evidence. It stays on the fast path for a confident separated result or
+when the top passage matches a clause explicitly named by the user. Low-relevance
+questions are rejected without loading the 4B model.
+
+The golden evaluation command intentionally keeps the 4B reranker as its default.
+Evaluation can run in the background as a quality reference while foreground
+questions use adaptive routing.
+
+### Resident interactive engine
+
+Streamlit interactive questions now run through one serialized resident engine
+instead of starting a fresh Python process for every message. The engine keeps
+the Ollama embedding client and the 0.6B reranker available between questions.
+Only one interactive query runs at a time, which prevents concurrent model loads
+from exhausting GPU memory. Evaluation and ingestion remain isolated background
+processes.
+
+Completed interactive answers are also stored in a bounded local response cache
+at `.rag_runs/query-response-cache.json`. Cache keys normalize question casing
+and whitespace and include collection, retrieval, reranking, relevance, and answer
+settings. Identical requests return without retrieval or generation. Entries expire
+after 24 hours, only the newest 200 are retained, and successful corpus ingestion
+clears the cache so responses cannot refer to superseded document content.
+
+A second semantic-cache layer handles paraphrases. It embeds a cache miss once
+and compares it with stored query vectors under identical pipeline settings.
+Questions naming a clause must carry the same clause identifier and reach cosine
+similarity 0.88; questions without a clause require 0.92. Below-threshold requests
+continue through normal retrieval rather than risking an incorrect cached answer.
+
+
+Related-topic cache matches are treated differently from answer-cache hits. A
+lexical or semantic topic overlap of at least 0.72 prevents expensive 4B
+escalation, but the system still retrieves evidence, runs the resident 0.6B
+reranker, and generates a fresh answer for the new intent. The interactive UI
+also makes 4B escalation opt-in; it is disabled by default so an ordinary chat
+cache miss cannot silently become a two-minute request. Evaluation retains the
+4B quality-reference path.
+
+
+When a query explicitly names a clause and hybrid retrieval returns the matching
+passage with a score of at least 0.70, the cross-encoder is bypassed. Questions
+without that strong lexical signal still use the adaptive 0.6B/4B policy.
+
+Answer generation uses Ollama's streaming response. Streamlit refreshes the
+assistant message every half second, showing a thinking indicator before the
+first token and progressively displaying the answer afterward. A future FastAPI
+service should expose the same behavior through SSE or WebSockets.
+
+Keeping models resident increases idle memory usage. A 4B escalation evicts the
+cached 0.6B reranker before loading the larger model; the lightweight model is
+then restored on the next ordinary question.
+
+### Updated live measurement
+
+The CIS Safeguard 5.3 acceptance question returned the correct `45 days`
+answer through the exact-clause route. In one resident process, the first query
+completed in **5.62 seconds** and the immediately repeated warm query completed
+in **1.32 seconds**. After caching that completed response, an identical request returned in
+**0.0002 seconds** inside the engine, before the UI refresh interval.
+The earlier optimized one-shot path took 20.46 seconds, while the comparable
+4B path took 53.92 seconds. These measurements are local and will
+vary with hardware, model residency, and Ollama state.
+
+A separate non-clause lookup verified 0.6B residency directly: retrieval plus
+lightweight reranking took **5.85 seconds** on the first run and **0.99 seconds**
+on the immediately repeated warm run, with answer generation disabled.
+
+A live rewording of the Safeguard 5.3 request matched a cached paraphrase at
+cosine similarity **0.937** and returned the cached grounded answer in **1.98
+seconds**, including query embedding. Exact normalized repeats still avoid the
+embedding step and remain effectively immediate.
+
+
+## Definition of frontend-ready
+
+The repository is ready for the first React integration when:
+
+- FastAPI starts independently from Streamlit;
+- both interfaces call the same service layer;
+- a query returns a job ID immediately;
+- job progress and final results have stable schemas;
+- Ollama and Weaviate health is visible;
+- heavy jobs obey one global concurrency policy;
+- CORS and input limits are configured;
+- errors do not expose internal details;
+- Streamlit and all existing tests still work;
+- API and one live RAG integration test pass.
+
+Tailwind CSS only affects presentation. It does not change any backend readiness
+requirement.

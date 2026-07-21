@@ -1,0 +1,186 @@
+{
+  "result": {
+    "query": "when are dormant accounts disabled?",
+    "ranked": [
+      {
+        "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.",
+        "metadata": {
+          "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0260",
+            "chunk_index": 260,
+            "page_start": 69,
+            "page_end": 81,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "Appendix",
+              "Controls and Safeguards Index"
+            ],
+            "clause_number": "5.3",
+            "token_count": 54,
+            "element_type": "clause",
+            "table_annotation": {
+              "clause_number": "5.3",
+              "asset_type": "Users",
+              "security_function": "",
+              "applicable_groups": [
+                "IG1",
+                "IG2",
+                "IG3"
+              ]
+            }
+          }
+        },
+        "score": 0.9746114015579224,
+        "rerank_score": 1.0
+      },
+      {
+        "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.\n•••",
+        "metadata": {
+          "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+          "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+          "chunk_id": "control05-safeguard5.3-part02",
+          "chunk_index": 271,
+          "page_start": 69,
+          "page_end": 81,
+          "breadcrumb": [
+            "CIS Critical Security Controls®",
+            "Appendix",
+            "Controls and Safeguards Index"
+          ],
+          "clause_number": "5.3",
+          "token_count": 57,
+          "element_type": "clause",
+          "table_annotation": {
+            "clause_number": "5.3",
+            "asset_type": "Users",
+            "security_function": "",
+            "applicable_groups": [
+              "IG1",
+              "IG2",
+              "IG3"
+            ]
+          }
+        },
+        "score": 0.7595010995864868,
+        "rerank_score": 1.0
+      },
+      {
+        "text": "Credentials are assets that must be inventoried and tracked like enterprise assets and\nsoftware, as they are the primary entry point into the enterprise. Appropriate password\npolicies and guidance not to reuse passwords should be developed.\n→For guidance on the creation and use of passwords, reference the CIS\nPassword Policy Guide – https://www.cisecurity.org/white-papers/cis-\npassword-policy-guide/\nAccounts must also be tracked; any account that is dormant must be disabled and\neventually removed from the system. There should be periodic audits to ensure all\nactive accounts are traced back to authorized users of the enterprise asset. Look\nfor new accounts added since previous review, especially administrator and service\naccounts. Close attention should be made to identify and track administrative, or high-\nprivileged accounts and service accounts. Control 05: Account Management\n6\n4/6\n6/6",
+        "metadata": {
+          "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+          "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+          "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0099",
+          "chunk_index": 75,
+          "page_start": 29,
+          "page_end": 29,
+          "breadcrumb": [
+            "CIS Critical Security Controls®",
+            "CIS Critical Security Controls",
+            "Account Management",
+            "IG2•"
+          ],
+          "clause_number": null,
+          "token_count": 183,
+          "element_type": "narrative",
+          "table_annotation": null
+        },
+        "score": 0.44616979360580444,
+        "rerank_score": 0.96875
+      },
+      {
+        "text": "Credentials are assets that must be inventoried and tracked like enterprise assets and\nsoftware, as they are the primary entry point into the enterprise. Appropriate password\npolicies and guidance not to reuse passwords should be developed.\n→For guidance on the creation and use of passwords, reference the CIS\nPassword Policy Guide – https://www.cisecurity.org/white-papers/cis-\npassword-policy-guide/\nAccounts must also be tracked; any account that is dormant must be disabled and\neventually removed from the system. There should be periodic audits to ensure all\nactive accounts are traced back to authorized users of the enterprise asset. Look\nfor new accounts added since previous review, especially administrator and service\naccounts. Close attention should be made to identify and track administrative, or high-\nprivileged accounts and service accounts. Control 05: Account Management\nUsers with administrator or other privileged access should have separate accounts for\nthose higher authority tasks. These accounts would only be used when performing\nthose tasks or accessing especially sensitive data, to reduce risk in case their normal\nuser account is compromised. For users with multiple accounts, their base user\naccount, used day-to-day for non-administrative tasks, should not have any elevated\nprivileges. Single Sign-On (SSO) is convenient and secure when an enterprise has many\napplications, including cloud applications, which helps reduce the number of\npasswords a user must manage. Users are recommended to use password manager\napplications to securely store their passwords, and should be instructed not to keep\nthem in spreadsheets or text files on their computers. MFA is recommended for\nremote access.",
+        "metadata": {
+          "text": "Credentials are assets that must be inventoried and tracked like enterprise assets and\nsoftware, as they are the primary entry point into the enterprise. Appropriate password\npolicies and guidance not to reuse passwords should be developed.\n→For guidance on the creation and use of passwords, reference the CIS\nPassword Policy Guide – https://www.cisecurity.org/white-papers/cis-\npassword-policy-guide/\nAccounts must also be tracked; any account that is dormant must be disabled and\neventually removed from the system. There should be periodic audits to ensure all\nactive accounts are traced back to authorized users of the enterprise asset. Look\nfor new accounts added since previous review, especially administrator and service\naccounts. Close attention should be made to identify and track administrative, or high-\nprivileged accounts and service accounts. Control 05: Account Management\nUsers with administrator or other privileged access should have separate accounts for\nthose higher authority tasks. These accounts would only be used when performing\nthose tasks or accessing especially sensitive data, to reduce risk in case their normal\nuser account is compromised. For users with multiple accounts, their base user\naccount, used day-to-day for non-administrative tasks, should not have any elevated\nprivileges. Single Sign-On (SSO) is convenient and secure when an enterprise has many\napplications, including cloud applications, which helps reduce the number of\npasswords a user must manage. Users are recommended to use password manager\napplications to securely store their passwords, and should be instructed not to keep\nthem in spreadsheets or text files on their computers. MFA is recommended for\nremote access.",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0070",
+            "chunk_index": 70,
+            "page_start": 29,
+            "page_end": 30,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "CIS Critical Security Controls",
+              "Account Management"
+            ],
+            "clause_number": null,
+            "token_count": 334,
+            "element_type": "narrative",
+            "table_annotation": null
+          }
+        },
+        "score": 0.575753927230835,
+        "rerank_score": 0.94921875
+      },
+      {
+        "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n6.2 Establish an Access Revoking Process\nUsers\n-Protect-\nEstablish and follow a process, preferably automated, for revoking access to enterprise assets, through disabling\naccounts immediately upon termination, rights revocation, or role change of a user. Disabling accounts, instead of\ndeleting accounts, may be necessary to preserve audit trails.\n•••",
+        "metadata": {
+          "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+          "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+          "chunk_id": "control06-safeguard6.2",
+          "chunk_index": 87,
+          "page_start": 32,
+          "page_end": 32,
+          "breadcrumb": [
+            "CIS Critical Security Controls®",
+            "CIS Critical Security Controls",
+            "Access Control Management",
+            "Safeguards"
+          ],
+          "clause_number": "6.2",
+          "token_count": 94,
+          "element_type": "clause",
+          "table_annotation": {
+            "clause_number": "6.2",
+            "asset_type": "Users",
+            "security_function": "",
+            "applicable_groups": [
+              "IG1",
+              "IG2",
+              "IG3"
+            ]
+          }
+        },
+        "score": 0.3165692090988159,
+        "rerank_score": 0.173828125
+      }
+    ],
+    "answer": "According to the context provided, dormant accounts should be deleted or disabled after a period of 45 days of inactivity, where supported.",
+    "is_relevant": true,
+    "top_relevance_score": 1.0,
+    "rerank_route": {
+      "route": "heavy",
+      "reason": "retrieval is relevant but the lightweight ranking is uncertain",
+      "top_score": 1.0,
+      "margin": 0.0,
+      "exact_clause_match": false,
+      "complex_query": false,
+      "selected_model": "Qwen/Qwen3-Reranker-4B",
+      "escalated": true,
+      "retrieved_candidate_count": 20,
+      "unique_candidate_count": 15,
+      "light_candidate_count": 8,
+      "heavy_candidate_count": 12
+    },
+    "relevance_threshold": 0.2
+  },
+  "configuration": {
+    "collection": "DocumentChunks",
+    "embed_model": "embeddinggemma",
+    "host": "http://localhost:11434",
+    "heavy_rerank_model": "Qwen/Qwen3-Reranker-4B",
+    "adaptive_rerank": true,
+    "rerank_model": "Qwen/Qwen3-Reranker-0.6B",
+    "rerank_device": null,
+    "answer_model": "qwen2.5:1.5b",
+    "retrieve_k": 20,
+    "alpha": 0.55,
+    "top_n": 5,
+    "answer": true,
+    "relevance_threshold": 0.2
+  },
+  "elapsed_seconds": 76.71409992999997
+}

@@ -1,0 +1,18 @@
+{
+  "query": "when are dormant accounts disabled?",
+  "configuration": {
+    "collection": "DocumentChunks",
+    "embed_model": "embeddinggemma",
+    "host": "http://localhost:11434",
+    "heavy_rerank_model": "Qwen/Qwen3-Reranker-4B",
+    "adaptive_rerank": true,
+    "rerank_model": "Qwen/Qwen3-Reranker-0.6B",
+    "rerank_device": null,
+    "answer_model": "qwen2.5:1.5b",
+    "retrieve_k": 20,
+    "alpha": 0.55,
+    "top_n": 5,
+    "answer": true,
+    "relevance_threshold": 0.2
+  }
+}

@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import logging
+from typing import Sequence
+
+from ollama import Client
+
+logger = logging.getLogger("embedder")
+
+# Keep the query and document prefixes different because EmbeddingGemma expects them.
+_QUERY_PREFIX = "task: search result | query: "
+_DOCUMENT_PREFIX = "title: none | text: "
+
+
+class Embedder:
+    """
+    Generates embeddings via a local Ollama server.
+
+    Kept API-compatible with the old sentence-transformers-based
+    Embedder (embed / embed_batch) while adding the asymmetric
+    embed_query / embed_passages methods embed_chunks.py now uses.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "embeddinggemma",
+        host: str = "http://localhost:11434",
+    ):
+        self.model_name = model_name
+        self.client = Client(host=host)
+        logger.info("Using Ollama embedding model '%s' at %s", model_name, host)
+        self._warn_if_model_missing()
+
+    def _warn_if_model_missing(self) -> None:
+        try:
+            names = {m["model"] for m in self.client.list().get("models", [])}
+        except Exception as exc:  # server not up yet, etc.
+            logger.warning("Could not reach Ollama to verify model list: %s", exc)
+            return
+        if self.model_name not in names and f"{self.model_name}:latest" not in names:
+            logger.warning(
+                "Model '%s' not found in `ollama list`. Run `ollama pull %s` first.",
+                self.model_name,
+                self.model_name,
+            )
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single search query (uses the query prompt prefix)."""
+        response = self.client.embed(model=self.model_name, input=_QUERY_PREFIX + text)
+        return response["embeddings"][0]
+
+    def embed_passages(self, texts: Sequence[str], batch_size: int = 32) -> list[list[float]]:
+        """
+        Embed a list of documents/passages (uses the document prompt
+        prefix). /api/embed accepts a list input directly, so this just
+        chunks the requests to keep individual calls a sane size.
+        """
+        prefixed = [_DOCUMENT_PREFIX + t for t in texts]
+        vectors: list[list[float]] = []
+        for i in range(0, len(prefixed), batch_size):
+            batch = prefixed[i : i + batch_size]
+            logger.debug("Embedding batch %d-%d of %d", i, i + len(batch), len(prefixed))
+            response = self.client.embed(model=self.model_name, input=batch)
+            vectors.extend(response["embeddings"])
+        return vectors
+
+    # These aliases keep older callers working while they move to the newer method names.
+
+    def close(self) -> None:
+        """Close the HTTP connection pool owned by the Ollama client."""
+        self.client._client.close()
+
+    def embed(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_passages(texts)

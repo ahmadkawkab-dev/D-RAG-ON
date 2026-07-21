@@ -1,0 +1,54 @@
+[theme]
+base = "light"
+primaryColor = "#5B5FEF"
+font = "Roboto, system-ui, sans-serif"
+headingFont = "Roboto Mono, ui-monospace, monospace"
+codeFont = "Roboto Mono, ui-monospace, monospace"
+baseRadius = "0.85rem"
+buttonRadius = "0.75rem"
+showWidgetBorder = true
+chartCategoricalColors = ["#5B5FEF", "#8F66E8", "#2F9E6D", "#D28A26", "#3B83BD", "#C65F82"]
+
+[theme.light]
+backgroundColor = "#F3EDE3"
+secondaryBackgroundColor = "#FFFDF8"
+textColor = "#25231F"
+borderColor = "#DED5C8"
+dataframeBorderColor = "#DED5C8"
+dataframeHeaderBackgroundColor = "#F0E8DC"
+codeBackgroundColor = "#EEE7DD"
+greenColor = "#2F9E6D"
+orangeColor = "#D28A26"
+redColor = "#D94C4C"
+violetColor = "#8F66E8"
+
+[theme.dark]
+backgroundColor = "#171511"
+secondaryBackgroundColor = "#24211B"
+textColor = "#FAF7F1"
+borderColor = "#494238"
+dataframeBorderColor = "#494238"
+dataframeHeaderBackgroundColor = "#302C25"
+codeBackgroundColor = "#211E19"
+greenColor = "#51BA87"
+orangeColor = "#E3A24B"
+redColor = "#E56A6A"
+violetColor = "#A98AF0"
+
+[theme.light.sidebar]
+backgroundColor = "#FFFDF8"
+secondaryBackgroundColor = "#F0E8DC"
+textColor = "#25231F"
+borderColor = "#DED5C8"
+
+[theme.dark.sidebar]
+backgroundColor = "#24211B"
+secondaryBackgroundColor = "#302C25"
+textColor = "#FAF7F1"
+borderColor = "#494238"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true

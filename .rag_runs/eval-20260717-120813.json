@@ -1,0 +1,200 @@
+{
+  "summary": {
+    "n_examples": 3,
+    "unverified_examples": 3,
+    "retrieval": {
+      "mean_hit_rate": 1,
+      "mean_recall": 1.0,
+      "mean_mrr": 1.0
+    },
+    "judge": {
+      "completed_cases": 3,
+      "total_cases": 3,
+      "complete": true
+    }
+  },
+  "examples": [
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "relevant_chunk_ids": [
+        "control03-safeguard3.5"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control03-safeguard3.5",
+        "control03-safeguard3.5-part02",
+        null
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "actual_output": "CIS requires securely disposing of data according to the enterprise’s data management process and ensuring that the disposal process and method are commensurate with the data sensitivity. This includes protecting the data during disposal, following the guidelines outlined in the enterprise's data management process, and revisiting annually as relationships and data may change. The focus is not on the checklist but rather on the fundamentals of the program.",
+      "expected_output": "Dispose of data according to the enterprise data management process, using a disposal process and method appropriate to the data's sensitivity.",
+      "retrieval_context": [
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Data]\n3.5 Securely Dispose of Data\nData\nSecurely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and\nmethod are commensurate with the data sensitivity.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Data]\n3.5 Securely Dispose of Data\nData\nSecurely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and method are\ncommensurate with the data sensitivity.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Data]\n3.5 Securely Dispose of Data\nData\n-Protect-\nSecurely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and\nmethod are commensurate with the data sensitivity.\n•••",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Data]\n3.5 Securely Dispose of Data\nData\n-Protect-\nSecurely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and method are\ncommensurate with the data sensitivity.\n•••",
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: N/A]\n15.3 CIS Controls v8\nMost enterprises have traditionally used standard checklists, such as ones from ISO\n27001 or the CIS Controls. Often, this process is managed through spreadsheets;\nhowever, there are online platforms now that allow central management of this\nprocess. The focus of this CIS Control though is not on the checklist; instead it is on\nthe fundamentals of the program. Make sure to revisit annually, as relationships and\ndata may change. No matter what the enterprise’s size, there should be a policy about reviewing\nservice providers, an inventory of these vendors, and a risk rating associated with\ntheir potential impact to the business in case of an incident. There should also be\nlanguage in the contracts to hold them accountable if there is an incident that impacts\nthe enterprise. There are third-party assessment platforms that have an inventory of thousands of\nservice providers, which attempt to provide a central view of the industry, to help\nenterprises make more informed risk decisions. These platforms often have a dynamic\nrisk score for service providers, based (usually) on passive technical assessments, or\nenriched through other firms’ third-party assessments. When performing reviews, focus on the services or departments of the provider that are\nsupporting the enterprise. A third-party that has a managed security service contract,\nor retainer, and holds cybersecurity insurance, can also help with risk reduction. It is also important to securely decommission service providers when contracts are\ncompleted or terminated. Decommission activities may include user and service\naccount deactivation, termination of data flows, and secure disposal of enterprise data\nwithin service provider systems.\n→Refer to NIST® 800-88r1: Guidelines for Media Sanitization, as\nappropriate – https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST."
+      ]
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "relevant_chunk_ids": [
+        "control01-safeguard1.1"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control01-safeguard1.1",
+        "control01-safeguard1.1-part02",
+        null
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "actual_output": "The enterprise asset inventory should include:\n\n- Network addresses (if static)\n- Hardware addresses\n- Machine names\n- Enterprise asset owner\n- Department for each asset\n- Whether the asset has been approved to connect to the network\n\nIt must be updated bi-annually, or more frequently. The context also mentions that mobile end-user devices can use MDM type tools to support this process where appropriate.\n\nThe inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within cloud environments. It also covers assets regularly connected to the enterprise’s network infrastructure, even if they are not under control of the enterprise.",
+      "expected_output": "The inventory should include end-user, network, IoT, and server assets; static network address, hardware address, machine name, owner, department, and approval status. It should be reviewed and updated bi-annually or more frequently.",
+      "retrieval_context": [
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Devices]\n1.1 Establish and Maintain Detailed Enterprise Asset Inventory\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential\nto store or process data, to include: end-user devices (including portable and mobile), network devices, non-\ncomputing/IoT devices, and servers. Ensure the inventory records the network address (if static), hardware address,\nmachine name, enterprise asset owner, department for each asset, and whether the asset has been approved to\nconnect to the network. For mobile end-user devices, MDM type tools can support this process, where appropriate.\nThis inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure,\neven if they are not under control of the enterprise. Review and update the inventory of all enterprise assets\nbi-annually, or more frequently.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Devices]\n1.1 Establish and Maintain Detailed Enterprise Asset Inventory\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential to store or process data,\nto include: end-user devices (including portable and mobile), network devices, non-computing/IoT devices, and servers. Ensure the\ninventory records the network address (if static), hardware address, machine name, enterprise asset owner, department for each asset,\nand whether the asset has been approved to connect to the network. For mobile end-user devices, MDM type tools can support this\nprocess, where appropriate. This inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within\ncloud environments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure, even if they\nare not under control of the enterprise. Review and update the inventory of all enterprise assets bi-annually, or more frequently.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Devices]\n1.1 Establish and Maintain Detailed Enterprise Asset Inventory\nDevices\n-Identify-\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential\nto store or process data, to include: end-user devices (including portable and mobile), network devices, non-\ncomputing/IoT devices, and servers. Ensure the inventory records the network address (if static), hardware address,\nmachine name, enterprise asset owner, department for each asset, and whether the asset has been approved to\nconnect to the network. For mobile end-user devices, MDM type tools can support this process, where appropriate.\nThis inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure,\neven if they are not under control of the enterprise. Review and update the inventory of all enterprise assets\nbi-annually, or more frequently.\n•••",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Devices]\n1.1 Establish and Maintain Detailed Enterprise Asset Inventory\nDevices\n-Identify-\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential to store or process data,\nto include: end-user devices (including portable and mobile), network devices, non-computing/IoT devices, and servers. Ensure the\ninventory records the network address (if static), hardware address, machine name, enterprise asset owner, department for each asset,\nand whether the asset has been approved to connect to the network. For mobile end-user devices, MDM type tools can support this\nprocess, where appropriate. This inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within\ncloud environments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure, even if they\nare not under control of the enterprise. Review and update the inventory of all enterprise assets bi-annually, or more frequently.\n•••",
+        "1.4 Use Dynamic Host Configuration Protocol (DHCP) Logging to Update Enterprise\nAsset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory.\nReview and use logs to update the enterprise’s asset inventory weekly, or more frequently."
+      ]
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "relevant_chunk_ids": [
+        "control01-safeguard1.4"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control01-safeguard1.4",
+        "control01-safeguard1.4-part02",
+        null
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "actual_output": "According to the context provided, using DHCP logging to update the enterprise's asset inventory should involve:\n\n1. Logging on all DHCP servers or IP address management tools.\n2. Reviewing and utilizing logs weekly or more frequently.\n\nThe key points are:\n- Use of \"DHCP\" (Dynamic Host Configuration Protocol) in the instruction.\n- Regular updates (\"Review and use logs to update\") at least once a week, but more frequently if needed.\n- The instruction applies to enterprise environments where assets need inventory tracking.",
+      "expected_output": "Use DHCP logging on all DHCP servers or IP address management tools to update the asset inventory, and review and use those logs weekly or more frequently.",
+      "retrieval_context": [
+        "1.4 Use Dynamic Host Configuration Protocol (DHCP) Logging to Update Enterprise\nAsset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory.\nReview and use logs to update the enterprise’s asset inventory weekly, or more frequently.",
+        "1.4 Use Dynamic Host Configuration Protocol (DHCP) Logging to\nUpdate Enterprise Asset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update\nthe enterprise’s asset inventory. Review and use logs to update the enterprise’s asset inventory weekly, or\nmore frequently.",
+        "1.4 Use Dynamic Host Configuration Protocol (DHCP) Logging to\nDevices\n-Identify-\nUpdate Enterprise Asset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update\nthe enterprise’s asset inventory. Review and use logs to update the enterprise’s asset inventory weekly, or\nmore frequently.\n•",
+        "1.4 Use Dynamic Host Configuration Protocol (DHCP) Logging to Update Enterprise\nDevices\n-Identify-\nAsset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory.\nReview and use logs to update the enterprise’s asset inventory weekly, or more frequently.\n•",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Devices]\n1.1 Establish and Maintain Detailed Enterprise Asset Inventory\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential\nto store or process data, to include: end-user devices (including portable and mobile), network devices, non-\ncomputing/IoT devices, and servers. Ensure the inventory records the network address (if static), hardware address,\nmachine name, enterprise asset owner, department for each asset, and whether the asset has been approved to\nconnect to the network. For mobile end-user devices, MDM type tools can support this process, where appropriate.\nThis inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure,\neven if they are not under control of the enterprise. Review and update the inventory of all enterprise assets\nbi-annually, or more frequently."
+      ]
+    }
+  ],
+  "deepeval_metric_rows": [
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "metric": "Answer Relevancy",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the response is fully relevant and directly addresses the question about what CIS requires when securely disposing of data. There are no irrelevant statements in the output."
+    },
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "metric": "Faithfulness",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because there are no contradictions, indicating the actual output is fully aligned with the retrieval context."
+    },
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all relevant nodes are ranked first, and the irrelevant node is placed last, ensuring perfect contextual precision."
+    },
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the expected output sentence aligns perfectly with the retrieval context node(s) in retrieval context, specifically node(s) 1st, 2nd, 3rd, and 4th, which provide a direct and comprehensive match."
+    },
+    {
+      "query": "What does CIS require when securely disposing of data?",
+      "metric": "Contextual Relevancy",
+      "score": 0.47619047619047616,
+      "success": false,
+      "reason": "The score is 0.48 because the retrieval context contains some relevant statements about securely disposing of data, such as 'Securely dispose of data as outlined in the enterprise’s data management process' and 'Ensure the disposal process and method are commensurate with the data sensitivity.' However, most of the context is irrelevant, focusing on service provider management, checklists, and third-party platforms, which do not directly address CIS requirements for securely disposing of data."
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "metric": "Answer Relevancy",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the response is fully relevant and directly addresses the question about the information that must be included in an enterprise asset inventory and the frequency of its review. There are no irrelevant statements to detract from the score."
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "metric": "Faithfulness",
+      "score": 0.9,
+      "success": true,
+      "reason": "The score is 0.90 because the actual output incorrectly implies that MDM tools are required for all devices or are a mandatory part of the inventory process, while the context only states that MDM tools can support mobile end-user devices for the inventory process and does not claim they are required or mandatory."
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all relevant nodes are ranked higher than irrelevant nodes. The first four nodes (rank 1-4) have 'yes' verdicts and directly address the input's question about what the inventory must contain and how often it should be reviewed. The fifth node (rank 5) has a 'no' verdict and discusses DHCP logging and weekly reviews, which are not directly relevant to the question."
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all sentences in the expected output are fully supported by the nodes in retrieval context, specifically 1st, 2nd, 3rd, and 4th nodes, which cover both the inventory components and the review frequency requirements."
+    },
+    {
+      "query": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+      "metric": "Contextual Relevancy",
+      "score": 0.967741935483871,
+      "success": true,
+      "reason": "The score is 0.97 because the retrieval context provides detailed information about what information must be included in the enterprise asset inventory and how often it should be reviewed, despite some irrelevant metadata about implementation groups and asset types."
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "metric": "Answer Relevancy",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the output is fully relevant and directly addresses the question about using DHCP logging to maintain the enterprise asset inventory and the frequency of such logging."
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "metric": "Faithfulness",
+      "score": 0.8,
+      "success": true,
+      "reason": "The score is 0.80 because the actual output mentions the use of 'DHCP' specifically in the instruction, while the retrieval context emphasizes the use of DHCP logging and IP address management tools for asset inventory, which is a contradiction."
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all relevant nodes are ranked higher than irrelevant nodes. The first four nodes with 'yes' verdicts directly address the use of DHCP logging for maintaining the enterprise asset inventory and the frequency of review, while the fifth node with 'no' verdict is about general asset inventory practices and not specifically related to DHCP logging, thus appropriately ranked lower."
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the expected output is fully supported by node(s) in retrieval context, specifically matching sentence 1 in the expected output with the content provided in the supportive reasons."
+    },
+    {
+      "query": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+      "metric": "Contextual Relevancy",
+      "score": 0.6153846153846154,
+      "success": true,
+      "reason": "The score is 0.62 because the retrieval context provides relevant statements about using DHCP logging to update the enterprise asset inventory and reviewing logs weekly, which directly address the input's questions. However, the majority of the reasons for irrelevancy indicate that the context lacked specific mention of DHCP logging in the initial statements, reducing the overall relevancy."
+    }
+  ]
+}

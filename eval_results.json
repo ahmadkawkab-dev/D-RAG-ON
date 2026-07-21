@@ -1,0 +1,200 @@
+{
+  "summary": {
+    "n_examples": 3,
+    "unverified_examples": 0,
+    "retrieval": {
+      "mean_hit_rate": 1,
+      "mean_recall": 1.0,
+      "mean_mrr": 0.8333333333333334
+    },
+    "judge": {
+      "completed_cases": 3,
+      "total_cases": 3,
+      "complete": true
+    }
+  },
+  "examples": [
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "relevant_chunk_ids": [
+        "control05-safeguard5.3"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control05-safeguard5.3",
+        "control05-safeguard5.3-part02",
+        "CIS_Controls__v8__Critical_Security_Controls__2023_08-0099"
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "actual_output": "The context states that users need to delete or disable any dormant accounts after a period of 45 days of inactivity, where supported. Therefore, the answer is 45 days.",
+      "expected_output": "45 days of inactivity.",
+      "retrieval_context": [
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.\n•••",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n5.3 Disable Dormant Accounts\nUsers\n-Respond-\nDelete or disable any dormant accounts after a period of 45 days of inactivity, where supported.\n•••",
+        "Credentials are assets that must be inventoried and tracked like enterprise assets and\nsoftware, as they are the primary entry point into the enterprise. Appropriate password\npolicies and guidance not to reuse passwords should be developed.\n→For guidance on the creation and use of passwords, reference the CIS\nPassword Policy Guide – https://www.cisecurity.org/white-papers/cis-\npassword-policy-guide/\nAccounts must also be tracked; any account that is dormant must be disabled and\neventually removed from the system. There should be periodic audits to ensure all\nactive accounts are traced back to authorized users of the enterprise asset. Look\nfor new accounts added since previous review, especially administrator and service\naccounts. Close attention should be made to identify and track administrative, or high-\nprivileged accounts and service accounts. Control 05: Account Management\n6\n4/6\n6/6"
+      ]
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "relevant_chunk_ids": [
+        "control08-safeguard8.10"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control08-safeguard8.10",
+        "control08-safeguard8.10-part02",
+        null
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 1.0,
+      "actual_output": "The minimum retention period required for audit logs under Safeguard 8.10 is 90 days, as indicated in all contexts provided [1], [2], and [3]. This applies to network assets across Implementation Groups IG2 and IG3. The context emphasizes the importance of retaining audit logs for a duration that meets regulatory requirements or allows sufficient time for audits and investigations.",
+      "expected_output": "A minimum of 90 days.",
+      "retrieval_context": [
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: Network]\n8.10 Retain Audit Logs\nNetwork\nRetain audit logs across enterprise assets for a minimum of 90 days.",
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: Network]\n8.10 Retain Audit Logs\nNetwork\nRetain audit logs across enterprise assets for a minimum of 90 days.",
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: Network]\n8.10 Retain Audit Logs\nNetwork\n-Protect-\nRetain audit logs across enterprise assets for a minimum of 90 days.\n••",
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: Network]\n8.10 Retain Audit Logs\nNetwork\n-Protect-\nRetain audit logs across enterprise assets for a minimum of 90 days.\n••",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Network]\n8.1 Establish and Maintain an Audit Log Management Process\nNetwork\nEstablish and maintain an audit log management process that defines the enterprise’s logging requirements. At a minimum, address\nthe collection, review, and retention of audit logs for enterprise assets. Review and update documentation annually, or when significant\nenterprise changes occur that could impact this Safeguard."
+      ]
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "relevant_chunk_ids": [
+        "control04-safeguard4.3"
+      ],
+      "retrieved_chunk_ids": [
+        null,
+        null,
+        "control04-safeguard4.3-part02",
+        "control04-safeguard4.3",
+        null
+      ],
+      "hit": true,
+      "recall": 1.0,
+      "mrr": 0.5,
+      "actual_output": "The maximum session-lock idle periods are:\n- For general-purpose operating systems, it must not exceed 15 minutes.\n- For mobile end-user devices, it must not exceed 2 minutes.",
+      "expected_output": "15 minutes for general-purpose operating systems; 2 minutes for mobile end-user devices.",
+      "retrieval_context": [
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n4.3 Configure Automatic Session Locking on Enterprise Assets\nUsers\nConfigure automatic session locking on enterprise assets after a defined period of inactivity. For general purpose operating systems, the\nperiod must not exceed 15 minutes. For mobile end-user devices, the period must not exceed 2 minutes.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n4.3 Configure Automatic Session Locking on Enterprise Assets\nUsers\nConfigure automatic session locking on enterprise assets after a defined period of inactivity. For general purpose\noperating systems, the period must not exceed 15 minutes. For mobile end-user devices, the period must not\nexceed 2 minutes.",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n4.3 Configure Automatic Session Locking on Enterprise Assets\nUsers\n-Protect-\nConfigure automatic session locking on enterprise assets after a defined period of inactivity. For general purpose operating systems, the\nperiod must not exceed 15 minutes. For mobile end-user devices, the period must not exceed 2 minutes.\n•••",
+        "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n4.3 Configure Automatic Session Locking on Enterprise Assets\nUsers\n-Protect-\nConfigure automatic session locking on enterprise assets after a defined period of inactivity. For general purpose\noperating systems, the period must not exceed 15 minutes. For mobile end-user devices, the period must not\nexceed 2 minutes.\n•••",
+        "[Applies to Implementation Groups: IG2, IG3; Asset Type: Devices]\n4.10 Enforce Automatic Device Lockout on Portable End-User Devices\n-Respond-\nEnforce automatic device lockout following a predetermined threshold of local failed authentication attempts on\nportable end-user devices, where supported. For laptops, do not allow more than 20 failed authentication attempts;\nfor tablets and smartphones, no more than 10 failed authentication attempts. Example implementations include\nMicrosoft® InTune Device Lock and Apple® Configuration Profile maxFailedAttempts."
+      ]
+    }
+  ],
+  "deepeval_metric_rows": [
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "metric": "Answer Relevancy",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the answer is fully relevant and directly addresses the question about the inactivity period for accounts in Safeguard 5.3. There are no irrelevant statements in the output."
+    },
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "metric": "Faithfulness",
+      "score": 0.5,
+      "success": true,
+      "reason": "The score is 0.50 because the actual output incorrectly assumes a numerical value for the period of inactivity, while the context only mentions that dormant accounts should be disabled or deleted after a period of inactivity where supported, without specifying a number."
+    },
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all relevant nodes are ranked higher than irrelevant nodes. The first four nodes (rank 1-4) are all 'yes' verdicts with direct relevance to the question about the 45-day inactivity period, while the fifth node (rank 5) is 'no' and irrelevant, correctly placed lower."
+    },
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the sentence '45 days of inactivity' in the expected output is directly supported by node(s) in retrieval context, specifically the 1st, 2nd, 3rd, and 4th nodes, which mention the same 45-day inactivity period."
+    },
+    {
+      "query": "How many days must an account be inactive before Safeguard 5.3 requires it to be deleted or disabled?",
+      "metric": "Contextual Relevancy",
+      "score": 0.4,
+      "success": false,
+      "reason": "The score is 0.40 because the retrieval context contains some relevant information such as 'Delete or disable any dormant accounts after a period of 45 days of inactivity, where supported.' which directly addresses the question. However, the majority of the context is irrelevant, focusing on other aspects of account management, audits, and policies, which do not pertain to the specific number of days for inactivity in Safeguard 5.3."
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "metric": "Answer Relevancy",
+      "score": 0.6666666666666666,
+      "success": true,
+      "reason": "The score is 0.67 because the response mentions implementation groups (IG2 and IG3) but does not directly address the minimum retention period required for audit logs under Safeguard 8.10. The answer is partially relevant but lacks the specific information requested."
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "metric": "Faithfulness",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because there are no contradictions, indicating the actual output is fully aligned with the retrieval context."
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the first two nodes with 'yes' verdicts directly answer the question and are ranked higher than the irrelevant nodes, which are correctly placed lower in the retrieval contexts."
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the expected output 'A minimum of 90 days' is directly supported by node(s) in retrieval context, specifically node 1, 2, 3, 4, and 5, which all mention retaining audit logs for a minimum of 90 days."
+    },
+    {
+      "query": "What is the minimum retention period required for audit logs under Safeguard 8.10?",
+      "metric": "Contextual Relevancy",
+      "score": 0.6363636363636364,
+      "success": true,
+      "reason": "The score is 0.64 because the retrieval context contains relevant statements such as 'Retain audit logs across enterprise assets for a minimum of 90 days' and '8.1 Establish and Maintain an Audit Log Management Process', which directly address the minimum retention period for audit logs. However, the majority of the context includes irrelevant information such as 'Applies to Implementation Groups: IG2, IG3; Asset Type: Network', '-Protect-', and 'Review and update documentation annually...', which do not pertain to the question."
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "metric": "Answer Relevancy",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the response is fully relevant and directly addresses the question about the maximum session-lock idle period in Safeguard 4.3 for different operating systems. There are no irrelevant statements."
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "metric": "Faithfulness",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because there are no contradictions, indicating the actual output is fully aligned with the retrieval context."
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "metric": "Contextual Precision",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because all relevant nodes are ranked first, and irrelevant nodes are placed last. The first four nodes provide the exact information needed about the maximum session-lock idle period, while the fifth node, which is irrelevant, is correctly ranked lower."
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "metric": "Contextual Recall",
+      "score": 1.0,
+      "success": true,
+      "reason": "The score is 1.00 because the expected output is fully supported by the retrieval context, specifically node(s) in retrieval context, which directly aligns with the 15 minutes for general-purpose operating systems and 2 minutes for mobile end-user devices."
+    },
+    {
+      "query": "What is the maximum session-lock idle period under Safeguard 4.3 for general-purpose operating systems versus mobile end-user devices?",
+      "metric": "Contextual Relevancy",
+      "score": 0.8421052631578947,
+      "success": true,
+      "reason": "The score is 0.84 because the retrieval context provides the exact information about the maximum session-lock idle period for general-purpose operating systems (15 minutes) and mobile end-user devices (2 minutes), which directly answers the input question. However, some irrelevant statements about device lockout policies and failed authentication attempts lower the score slightly."
+    }
+  ]
+}

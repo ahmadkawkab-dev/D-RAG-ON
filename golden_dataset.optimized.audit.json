@@ -1,0 +1,59 @@
+{
+  "source_records": 16,
+  "accepted_records": 12,
+  "rejected_records": 4,
+  "threshold": 0.8,
+  "output": "golden_dataset.optimized.jsonl",
+  "rejected_output": "golden_dataset.optimized.rejected.jsonl",
+  "audit": {
+    "records": 12,
+    "verified": 12,
+    "duplicate_questions": 0,
+    "unique_relevant_ids": 12,
+    "missing_fields": {},
+    "scope_counts": {
+      "safeguard": 7,
+      "glossary": 1,
+      "introduction": 3,
+      "control overview": 1
+    },
+    "answer_type_counts": {
+      "numeric / threshold": 4,
+      "list": 2,
+      "fact": 3,
+      "explanation": 3
+    },
+    "control_counts": {
+      "4": 2,
+      "5": 3,
+      "8": 2,
+      "11": 1
+    },
+    "covered_controls": [
+      4,
+      5,
+      8,
+      11
+    ],
+    "missing_controls": [
+      1,
+      2,
+      3,
+      6,
+      7,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ],
+    "provenance_counts": {
+      "claude-drafted-from-source": 11,
+      "human-corrected-from-source": 1
+    }
+  }
+}

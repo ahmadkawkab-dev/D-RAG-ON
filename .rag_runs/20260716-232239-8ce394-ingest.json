@@ -1,0 +1,32 @@
+{
+  "id": "20260716-232239-8ce394",
+  "kind": "ingest",
+  "label": "Ingest | CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+  "status": "completed",
+  "created_at": 1784233359.3516517,
+  "cwd": "/home/ahmad/rag_setup/rag_setup",
+  "log_path": "/home/ahmad/rag_setup/rag_setup/.rag_runs/20260716-232239-8ce394-ingest.log",
+  "command": [
+    "/home/ahmad/rag_setup/rag_setup/.venv/bin/python3",
+    "/home/ahmad/rag_setup/rag_setup/main.py",
+    "--collection",
+    "DocumentChunks",
+    "--embed-model",
+    "embeddinggemma",
+    "--host",
+    "http://localhost:11434",
+    "ingest",
+    "/home/ahmad/rag_setup/rag_setup/data/CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+    "--max-tokens",
+    "400",
+    "--overlap-tokens",
+    "60",
+    "--batch-size",
+    "32",
+    "--save-jsonl",
+    "/home/ahmad/rag_setup/rag_setup/chunks"
+  ],
+  "started_at": 1784233359.4096742,
+  "return_code": 0,
+  "finished_at": 1784233389.2065198
+}

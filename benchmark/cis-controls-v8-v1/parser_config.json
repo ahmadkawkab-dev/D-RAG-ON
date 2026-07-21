@@ -1,0 +1,25 @@
+{
+  "config_version": "cis-controls-v8-v1",
+  "pipeline_config": {
+    "boilerplate_min_page_count": 4,
+    "boilerplate_page_frequency": 0.2,
+    "clause_pattern": "^(\\d{1,2}\\.\\d{1,2})\\s+([A-Z][^\\n]{2,120})$",
+    "encoding_name": "cl100k_base",
+    "heading_max_chars": 120,
+    "heading_size_ratio": 1.15,
+    "max_tokens": 400,
+    "min_tokens": 40,
+    "ocr_dpi": 300,
+    "ocr_enabled": true,
+    "ocr_lang": "eng",
+    "ocr_min_chars": 30,
+    "overlap_tokens": 60,
+    "table_column_labels": [
+      "IG1",
+      "IG2",
+      "IG3"
+    ],
+    "table_column_tolerance_pt": 12.0
+  },
+  "schema_version": 1
+}

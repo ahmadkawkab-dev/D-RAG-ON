@@ -1,0 +1,171 @@
+"""
+streamlit_app.py
+=================
+Small GUI for the local RAG pipeline's *query* side (retrieve -> rerank ->
+optionally answer). Reuses `run_query_pipeline()` from main.py so the CLI
+(`main.py query ...`) and this GUI share one implementation.
+
+Run with:
+    uv run streamlit run streamlit_app.py
+"""
+
+from __future__ import annotations
+
+import streamlit as st
+from dashboard import render_app
+
+render_app()
+st.stop()
+
+# The dashboard above is active. The older query screen stays as a migration reference.
+import time
+import traceback
+
+import streamlit as st
+
+from main import run_query_pipeline
+
+st.set_page_config(page_title="RAG Query Console", page_icon="🔎", layout="wide")
+
+if "log_lines" not in st.session_state:
+    st.session_state.log_lines = []
+if "result" not in st.session_state:
+    st.session_state.result = None
+if "elapsed" not in st.session_state:
+    st.session_state.elapsed = None
+
+st.title("🔎 Local RAG Pipeline — Query Console")
+st.caption("Hybrid retrieval (BM25 + vector) → Qwen3 rerank → optional grounded answer. "
+           "All local: Weaviate + Ollama + transformers.")
+
+# Collect the same query options that are available in the command-line tool.
+
+with st.form("query_form"):
+    query = st.text_area(
+        "Question",
+        placeholder="e.g. Why is control of enterprise assets important?",
+        height=90,
+    )
+
+    st.markdown("**Connection**")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        collection = st.text_input("Weaviate collection", value="DocumentChunks")
+    with c2:
+        host = st.text_input("Ollama host", value="http://localhost:11434")
+    with c3:
+        embed_model = st.text_input("Embedding model", value="embeddinggemma")
+
+    st.markdown("**Retrieval**")
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        retrieve_k = st.number_input("retrieve_k (candidates pulled)", min_value=1, max_value=200, value=20)
+    with r2:
+        alpha = st.slider("alpha (0=BM25, 1=vector)", min_value=0.0, max_value=1.0, value=0.5, step=0.05)
+    with r3:
+        top_n = st.number_input("top_n (kept after rerank)", min_value=1, max_value=50, value=5)
+
+    st.markdown("**Reranker**")
+    rr1, rr2 = st.columns(2)
+    with rr1:
+        rerank_model = st.text_input("Rerank model (HF id)", value="Qwen/Qwen3-Reranker-4B")
+    with rr2:
+        rerank_device = st.selectbox("Rerank device", options=["auto", "cuda", "cpu"], index=0)
+
+    st.markdown("**Answer synthesis**")
+    a1, a2 = st.columns([1, 2])
+    with a1:
+        want_answer = st.checkbox("Synthesize final answer", value=True)
+    with a2:
+        answer_model = st.text_input("Answer model", value="qwen2.5:1.5b", disabled=not want_answer)
+
+    submitted = st.form_submit_button("Submit query", use_container_width=True, type="primary")
+
+# Run the shared query pipeline after the form is submitted.
+
+if submitted:
+    if not query.strip():
+        st.warning("Enter a question first.")
+    else:
+        st.session_state.log_lines = []
+        st.session_state.result = None
+        st.session_state.elapsed = None
+
+        terminal_placeholder = st.empty()
+
+        def render_terminal() -> None:
+            body = "\n".join(st.session_state.log_lines) or " "
+            terminal_placeholder.code(body, language="bash")
+
+        def on_line(line: str) -> None:
+            st.session_state.log_lines.append(line)
+            render_terminal()
+
+        on_line(f"$ query \"{query.strip()}\"")
+        render_terminal()
+
+        start = time.time()
+        try:
+            device = None if rerank_device == "auto" else rerank_device
+            result = run_query_pipeline(
+                query.strip(),
+                collection=collection,
+                embed_model=embed_model,
+                host=host,
+                rerank_model=rerank_model,
+                rerank_device=device,
+                answer_model=answer_model,
+                retrieve_k=int(retrieve_k),
+                alpha=float(alpha),
+                top_n=int(top_n),
+                answer=want_answer,
+                on_line=on_line,
+            )
+            st.session_state.result = result
+            on_line("")
+            on_line(f"$ done in {time.time() - start:.1f}s")
+        except Exception as exc:  # surface pipeline/connection errors in the terminal, not a crash
+            on_line("")
+            on_line(f"ERROR: {exc}")
+            on_line(traceback.format_exc())
+        finally:
+            st.session_state.elapsed = time.time() - start
+            render_terminal()
+
+# Keep the pipeline log visible after Streamlit reruns the page.
+
+st.subheader("Terminal")
+st.markdown(
+    """
+    <style>
+    div[data-testid="stCodeBlock"] pre {
+        background-color: #0b0f14 !important;
+        color: #d6f5d6 !important;
+        min-height: 160px;
+        max-height: 480px;
+        overflow-y: auto;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.code("\n".join(st.session_state.log_lines) or "(output will appear here after you submit a query)",
+        language="bash")
+
+# Show the answer and ranked chunks in a friendlier format.
+
+result = st.session_state.result
+if result:
+    st.subheader("Results")
+
+    if result.get("answer"):
+        st.markdown("**Answer**")
+        st.info(result["answer"])
+
+    st.markdown("**Ranked chunks**")
+    for i, c in enumerate(result["ranked"], 1):
+        with st.expander(
+            f"[{i}] rerank_score={c['rerank_score']:.2f}  ·  hybrid_score={c['score']:.4f}",
+            expanded=(i == 1),
+        ):
+            st.write(c["text"])

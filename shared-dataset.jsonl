@@ -1,0 +1,27 @@
+{
+    "name": "Enterprise asset inventory contents and review frequency",
+    "input": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+    "expected_output": "The inventory should include end-user, network, IoT, and server assets; static network address, hardware address, machine name, owner, department, and approval status. It should be reviewed and updated bi-annually or more frequently.",
+    "context": [
+      "Establish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential to store or process data, to include: end-user devices (including portable and mobile), network devices, non-computing/IoT devices, and servers. Ensure the inventory records the network address (if static), hardware address, machine name, enterprise asset owner, department for each asset, and whether the asset has been approved to connect to the network. Review and update the inventory of all enterprise assets bi-annually, or more frequently."
+    ],
+    "additional_metadata": {"id": "G01", "pages": [19], "safeguard": "1.1", "version": "v1"}
+  },
+  {
+    "name": "DHCP inventory update frequency",
+    "input": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+    "expected_output": "Use DHCP logging on all DHCP servers or IP address management tools to update the asset inventory, and review and use those logs weekly or more frequently.",
+    "context": [
+      "Use DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory. Review and use logs to update the enterprise’s asset inventory weekly, or more frequently."
+    ],
+    "additional_metadata": {"id": "G02", "pages": [19], "safeguard": "1.4", "version": "v1"}
+  },
+  {
+    "name": "Secure data disposal",
+    "input": "What does CIS require when securely disposing of data?",
+    "expected_output": "Dispose of data according to the enterprise data management process, using a disposal process and method appropriate to the data's sensitivity.",
+    "context": [
+      "Securely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and method are commensurate with the data sensitivity."
+    ],
+    "additional_metadata": {"id": "G03", "pages": [25], "safeguard": "3.5", "version": "v1"}
+  },

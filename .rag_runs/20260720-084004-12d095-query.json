@@ -1,0 +1,22 @@
+{
+  "id": "20260720-084004-12d095",
+  "kind": "query",
+  "label": "Question | what does safeguard 5.3 entail?",
+  "status": "completed",
+  "created_at": 1784526004.4455185,
+  "cwd": "/home/ahmad/rag_setup/rag_setup",
+  "log_path": "/home/ahmad/rag_setup/rag_setup/.rag_runs/20260720-084004-12d095-query.log",
+  "command": [
+    "/home/ahmad/rag_setup/rag_setup/.venv/bin/python3",
+    "/home/ahmad/rag_setup/rag_setup/background_tasks.py",
+    "query",
+    "--request",
+    "/home/ahmad/rag_setup/rag_setup/.rag_runs/query-requests/20260720-084004-ea130d.json",
+    "--result",
+    "/home/ahmad/rag_setup/rag_setup/.rag_runs/query-results/20260720-084004-ea130d.json"
+  ],
+  "priority": "interactive",
+  "started_at": 1784526004.4721134,
+  "return_code": 0,
+  "finished_at": 1784526037.4446075
+}

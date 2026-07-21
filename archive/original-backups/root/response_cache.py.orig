@@ -1,0 +1,226 @@
+"""Small persistent cache for completed interactive RAG responses."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+_CACHE_VERSION = 2
+_DEFAULT_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_RESPONSE_CACHE_PATH = (
+    Path(__file__).resolve().parent / ".rag_runs" / "query-response-cache.json"
+)
+_DEFAULT_MAX_ENTRIES = 200
+_KEY_SETTINGS = (
+    "collection",
+    "host",
+    "embed_model",
+    "rerank_model",
+    "heavy_rerank_model",
+    "answer_model",
+    "retrieve_k",
+    "light_rerank_k",
+    "heavy_rerank_k",
+    "top_n",
+    "alpha",
+    "relevance_threshold",
+    "adaptive_rerank",
+    "answer",
+)
+
+_CLAUSE_REFERENCE = re.compile(r"\b\d+(?:\.\d+)+\b")
+_TOPIC_STOPWORDS = {
+    "a", "an", "and", "are", "be", "can", "do", "does", "for",
+    "how", "is", "of", "the", "to", "what", "when", "where", "why",
+}
+
+
+def _topic_tokens(question: str) -> set[str]:
+    tokens = re.findall(r"[a-z0-9]+", normalize_question(question))
+    normalized = set()
+    for token in tokens:
+        if token in _TOPIC_STOPWORDS or len(token) < 3:
+            continue
+        for suffix in ("ing", "ed", "es", "s"):
+            if token.endswith(suffix) and len(token) > len(suffix) + 3:
+                token = token[: -len(suffix)]
+                break
+        normalized.add(token)
+    return normalized
+
+
+def _configuration_payload(configuration: dict[str, Any]) -> dict[str, Any]:
+    return {name: configuration.get(name) for name in _KEY_SETTINGS}
+
+
+def _configuration_key(configuration: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        _configuration_payload(configuration),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def normalize_question(question: str) -> str:
+    """Make harmless whitespace and casing differences share one cache entry."""
+
+    return " ".join(question.casefold().split())
+
+
+def response_cache_key(question: str, configuration: dict[str, Any]) -> str:
+    """Hash the question and every setting that can materially change its answer."""
+
+    payload = {
+        "version": _CACHE_VERSION,
+        "question": normalize_question(question),
+        "configuration": _configuration_payload(configuration),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class ResponseCache:
+    """Thread-safe JSON cache with expiration and a fixed maximum size."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        max_entries: int = _DEFAULT_MAX_ENTRIES,
+    ) -> None:
+        self.path = path
+        self.ttl_seconds = ttl_seconds
+        self.max_entries = max_entries
+        self._lock = threading.Lock()
+
+    def _read(self) -> dict[str, dict[str, Any]]:
+        if not self.path.exists():
+            return {}
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _write(self, entries: dict[str, dict[str, Any]]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(entries, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(self.path)
+
+    def clear(self) -> None:
+        """Remove every cached answer, normally after corpus ingestion."""
+
+        with self._lock:
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def get(
+        self,
+        question: str,
+        configuration: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        key = response_cache_key(question, configuration)
+        now = time.time()
+        with self._lock:
+            entries = self._read()
+            entry = entries.get(key)
+            if not entry:
+                return None
+            if now - float(entry.get("created_at", 0)) > self.ttl_seconds:
+                entries.pop(key, None)
+                self._write(entries)
+                return None
+            result = entry.get("result")
+            return dict(result) if isinstance(result, dict) else None
+
+    def semantic_get(
+        self,
+        question: str,
+        configuration: dict[str, Any],
+        query_embedding: list[float],
+        *,
+        minimum_similarity: float = 0.88,
+        unanchored_minimum: float = 0.92,
+    ) -> tuple[dict[str, Any], float, str] | None:
+        """Reuse the closest paraphrase only when semantic confidence is high."""
+
+        now = time.time()
+        expected_configuration = _configuration_key(configuration)
+        requested_clauses = set(_CLAUSE_REFERENCE.findall(question))
+        best: tuple[dict[str, Any], float, str] | None = None
+        required_similarity = (
+            minimum_similarity if requested_clauses else max(minimum_similarity, unanchored_minimum)
+        )
+
+        with self._lock:
+            entries = self._read()
+            for entry in entries.values():
+                if now - float(entry.get("created_at", 0)) > self.ttl_seconds:
+                    continue
+                if entry.get("configuration_key") != expected_configuration:
+                    continue
+                cached_question = str(entry.get("question") or "")
+                cached_clauses = set(_CLAUSE_REFERENCE.findall(cached_question))
+                if (requested_clauses or cached_clauses) and requested_clauses != cached_clauses:
+                    continue
+                cached_embedding = entry.get("query_embedding")
+                result = entry.get("result")
+                if not isinstance(cached_embedding, list) or not isinstance(result, dict):
+                    continue
+                if len(cached_embedding) != len(query_embedding):
+                    continue
+                dot = sum(a * b for a, b in zip(query_embedding, cached_embedding))
+                left = math.sqrt(sum(value * value for value in query_embedding))
+                right = math.sqrt(sum(value * value for value in cached_embedding))
+                similarity = dot / (left * right) if left and right else 0.0
+                if similarity >= required_similarity and (
+                    best is None or similarity > best[1]
+                ):
+                    best = (dict(result), similarity, cached_question)
+
+        return best
+
+    def put(
+        self,
+        question: str,
+        configuration: dict[str, Any],
+        result: dict[str, Any],
+        query_embedding: list[float] | None = None,
+    ) -> None:
+        key = response_cache_key(question, configuration)
+        with self._lock:
+            entries = self._read()
+            entries[key] = {
+                "created_at": time.time(),
+                "question": normalize_question(question),
+                "configuration_key": _configuration_key(configuration),
+                "query_embedding": query_embedding,
+                "result": result,
+            }
+            if len(entries) > self.max_entries:
+                ordered = sorted(
+                    entries,
+                    key=lambda item: float(entries[item].get("created_at", 0)),
+                    reverse=True,
+                )
+                entries = {item: entries[item] for item in ordered[: self.max_entries]}
+            self._write(entries)
+

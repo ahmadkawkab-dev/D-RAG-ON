@@ -1,0 +1,22 @@
+{
+  "id": "20260720-084234-3492c1",
+  "kind": "query",
+  "label": "Question | when are dormant accounts disabled?",
+  "status": "completed",
+  "created_at": 1784526154.0599883,
+  "cwd": "/home/ahmad/rag_setup/rag_setup",
+  "log_path": "/home/ahmad/rag_setup/rag_setup/.rag_runs/20260720-084234-3492c1-query.log",
+  "command": [
+    "/home/ahmad/rag_setup/rag_setup/.venv/bin/python3",
+    "/home/ahmad/rag_setup/rag_setup/background_tasks.py",
+    "query",
+    "--request",
+    "/home/ahmad/rag_setup/rag_setup/.rag_runs/query-requests/20260720-084234-07a5d7.json",
+    "--result",
+    "/home/ahmad/rag_setup/rag_setup/.rag_runs/query-results/20260720-084234-07a5d7.json"
+  ],
+  "priority": "interactive",
+  "started_at": 1784526154.1049213,
+  "return_code": 0,
+  "finished_at": 1784526243.2163022
+}

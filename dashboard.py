@@ -1,0 +1,2179 @@
+"""Friendly operations console for the complete local RAG workflow."""
+
+from __future__ import annotations
+
+import hashlib
+import html
+import json
+import random
+import re
+import statistics
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+import time
+import uuid
+from collections import Counter
+from pathlib import Path
+from typing import Any, Sequence
+
+import streamlit as st
+
+from scripts.benchmark_freeze import verify as verify_benchmark
+from scripts.golden_dataset_tools import (
+    append_unique_record,
+    assess_candidate,
+    audit_dataset,
+    build_candidate,
+    load_jsonl,
+    promote_candidate,
+    write_jsonl,
+)
+from json_review_workspace import (
+    load_review_context,
+    normalize_records_for_evaluation,
+    render_json_review_workspace,
+)
+from parsing_workspace import render_pdf_parsing_workspace
+from resident_query import run_resident_query
+from system_metrics import get_system_snapshot
+
+
+ROOT = Path(__file__).resolve().parent
+RUNS_DIR = ROOT / ".rag_runs"
+DEFAULT_PDF = ROOT / "data" / "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf"
+DEFAULT_DATASET = (
+    ROOT / "golden_dataset.optimized.jsonl"
+    if (ROOT / "golden_dataset.optimized.jsonl").exists()
+    else ROOT / "golden_dataset.jsonl"
+)
+CANDIDATES_PATH = ROOT / "golden_dataset.candidates.jsonl"
+BENCHMARK_DIR = ROOT / "benchmark" / "cis-controls-v8-v1"
+BENCHMARK_MANIFEST = BENCHMARK_DIR / "manifest.json"
+METRICS = [
+    "answer_relevancy",
+    "faithfulness",
+    "contextual_precision",
+    "contextual_recall",
+    "contextual_relevancy",
+]
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp.replace(path)
+
+
+def _format_bytes(value: int | float) -> str:
+    """Return a compact, human-readable byte size for run artifacts."""
+    size = max(0.0, float(value))
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units[:-1]:
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} {units[-1]}"
+
+
+# Jobs use JSON metadata and log files so they survive Streamlit page reruns.
+
+def start_background_job(
+    kind: str,
+    label: str,
+    command: list[str],
+    *,
+    priority: str = "background",
+) -> Path:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    token = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    meta_path = RUNS_DIR / f"{token}-{kind}.json"
+    log_path = RUNS_DIR / f"{token}-{kind}.log"
+    metadata = {
+        "id": token,
+        "kind": kind,
+        "label": label,
+        "status": "queued",
+        "created_at": time.time(),
+        "cwd": str(ROOT),
+        "log_path": str(log_path),
+        "command": command,
+        "priority": priority,
+    }
+    _write_json(meta_path, metadata)
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "job_runner.py"),
+            "--meta",
+            str(meta_path),
+            "--log",
+            str(log_path),
+            "--",
+            *command,
+        ],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return meta_path
+
+
+def list_jobs() -> list[dict]:
+    if not RUNS_DIR.exists():
+        return []
+    jobs = []
+    for path in sorted(RUNS_DIR.glob("*.json"), reverse=True):
+        if path.name.startswith("eval-") or path.name == "query-response-cache.json":
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["_meta_path"] = str(path)
+            jobs.append(payload)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return jobs
+
+
+def read_log(job: dict, max_chars: int = 16000) -> str:
+    log_path = job.get("log_path")
+    if not log_path:
+        return "No log is available for this entry."
+    path = Path(log_path)
+    if not path.is_file():
+        return "Waiting for the worker to start&"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return text[-max_chars:]
+
+
+# Read progress markers from worker logs for the jobs panel.
+
+def detect_progress(log: str) -> tuple[str, int, int] | None:
+    matches = re.findall(r"\[(judge|retrieve|rerank|generate|parse|mineru|embed)\s+(\d+)/(\d+)\]", log)
+    if not matches:
+        return None
+    phase, current, total = matches[-1]
+    return phase, int(current), int(total)
+
+
+def _phase_progress(log: str, phase: str) -> dict[str, int] | None:
+    matches = re.findall(
+        rf"\[{re.escape(phase)}\s+(\d+)/(\d+)\]",
+        log,
+    )
+    if not matches:
+        return None
+    current, total = matches[-1]
+    return {"current": int(current), "total": int(total)}
+
+
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remaining_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes:02d}m"
+
+
+def _eval_phases(command: list[str]) -> list[str]:
+    phases = ["retrieve", "rerank"]
+    if "--stages" in command:
+        start = command.index("--stages") + 1
+        selected: list[str] = []
+        for value in command[start:]:
+            if value.startswith("--"):
+                break
+            selected.append(value)
+        if "answer" in selected:
+            phases.append("generate")
+    if "--skip-judge" not in command:
+        phases.append("judge")
+    return phases
+
+
+def _historical_duration(job: dict, jobs: list[dict]) -> float | None:
+    durations = [
+        float(previous["finished_at"]) - float(previous["started_at"])
+        for previous in jobs
+        if previous.get("id") != job.get("id")
+        and previous.get("kind") == job.get("kind")
+        and previous.get("status") == "completed"
+        and previous.get("started_at") is not None
+        and previous.get("finished_at") is not None
+        and float(previous["finished_at"]) > float(previous["started_at"])
+    ]
+    return statistics.median(durations) if durations else None
+
+
+def _ingest_phases(command: list[str]) -> list[str]:
+    phases = ["parse"]
+    if "--mineru-mode" in command:
+        option_index = command.index("--mineru-mode")
+        if option_index + 1 < len(command) and command[option_index + 1] != "off":
+            phases.append("mineru")
+    phases.append("embed")
+    return phases
+
+
+def estimate_job_progress(job: dict, log: str, jobs: list[dict]) -> tuple[float, str]:
+    status = job.get("status", "queued")
+    now = time.time()
+    started_at = job.get("started_at")
+    finished_at = job.get("finished_at")
+    elapsed = max(0.0, float((finished_at or now) - started_at)) if started_at else 0.0
+
+    if status == "completed":
+        return 1.0, f"Completed in {_format_duration(elapsed)}"
+    if status == "queued":
+        return 0.0, "Queued"
+
+    detected = detect_progress(log)
+    kind = job.get("kind")
+    phases: list[str] = []
+    if kind == "eval":
+        phases = _eval_phases(job.get("command", []))
+    elif kind == "ingest":
+        phases = _ingest_phases(job.get("command", []))
+
+    if detected and phases:
+        phase, current, total = detected
+        if phase in phases:
+            phase_index = phases.index(phase)
+            fraction = (phase_index + min(current / max(total, 1), 1.0)) / len(phases)
+            remaining = elapsed * (1.0 - fraction) / fraction if fraction >= 0.02 else None
+            label = (
+                f"{phase.title()} {current}/{total} | {fraction:.0%} | "
+                f"elapsed {_format_duration(elapsed)}"
+            )
+            if remaining is not None and status == "running":
+                label += f" | ETA ~{_format_duration(remaining)}"
+            if status == "failed":
+                label += " | failed"
+            return min(max(fraction, 0.0), 1.0), label
+
+    expected_duration = _historical_duration(job, jobs)
+    if expected_duration and status == "running":
+        fraction = min(elapsed / expected_duration, 0.95)
+        remaining = max(expected_duration - elapsed, 0.0)
+        return fraction, (
+            f"Estimated {fraction:.0%} from previous {job.get('kind', 'job')} runs | "
+            f"elapsed {_format_duration(elapsed)} | ETA ~{_format_duration(remaining)}"
+        )
+
+    label = f"{status.title()} | elapsed {_format_duration(elapsed)}"
+    if status == "running":
+        label += " | ETA available after measurable progress or a completed run"
+    return 0.0, label
+
+
+def _command_option(
+    command: Sequence[str],
+    flag: str,
+    default: Any = None,
+) -> Any:
+    if flag not in command:
+        return default
+    index = command.index(flag) + 1
+    return command[index] if index < len(command) else default
+
+
+def _command_option_values(
+    command: Sequence[str],
+    flag: str,
+) -> list[str]:
+    if flag not in command:
+        return []
+    values: list[str] = []
+    for value in command[command.index(flag) + 1 :]:
+        if value.startswith("--"):
+            break
+        values.append(value)
+    return values
+
+
+def _command_positional_after(
+    command: Sequence[str],
+    command_name: str,
+) -> str | None:
+    if command_name not in command:
+        return None
+    index = command.index(command_name) + 1
+    return command[index] if index < len(command) else None
+
+
+def _saved_chunk_summary(path: Path) -> dict[str, Any]:
+    records = load_jsonl(path)
+    metadata = [
+        record.get("metadata") or {}
+        for record in records
+        if isinstance(record, dict)
+    ]
+    token_counts = [int(item.get("token_count", 0)) for item in metadata]
+    element_types = Counter(
+        str(item.get("element_type") or "unknown") for item in metadata
+    )
+    page_starts = [
+        int(item.get("page_start", 0))
+        for item in metadata
+        if item.get("page_start") is not None
+    ]
+    page_ends = [
+        int(item.get("page_end", item.get("page_start", 0)))
+        for item in metadata
+        if item.get("page_end", item.get("page_start")) is not None
+    ]
+    return {
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "chunks": len(records),
+        "unique_chunk_ids": len(
+            {item.get("chunk_id") for item in metadata if item.get("chunk_id")}
+        ),
+        "total_tokens": sum(token_counts),
+        "average_tokens": (
+            round(sum(token_counts) / len(token_counts), 2)
+            if token_counts
+            else 0
+        ),
+        "median_tokens": (
+            round(statistics.median(token_counts), 2)
+            if token_counts
+            else 0
+        ),
+        "minimum_tokens": min(token_counts, default=0),
+        "maximum_tokens": max(token_counts, default=0),
+        "total_characters": sum(
+            len(str(record.get("text") or ""))
+            for record in records
+            if isinstance(record, dict)
+        ),
+        "page_start": min(page_starts, default=0),
+        "page_end": max(page_ends, default=0),
+        "element_types": dict(sorted(element_types.items())),
+        "clause_chunks": sum(bool(item.get("clause_number")) for item in metadata),
+        "table_annotated_chunks": sum(
+            item.get("table_annotation") is not None for item in metadata
+        ),
+    }
+
+
+def _ingest_artifact_paths(command: Sequence[str]) -> list[Path]:
+    source_text = _command_positional_after(command, "ingest")
+    save_text = _command_option(command, "--save-jsonl")
+    if not source_text or not save_text:
+        return []
+    source = Path(source_text)
+    save_dir = Path(save_text)
+    pdfs = (
+        sorted(source.rglob("*.pdf"))
+        if source.is_dir()
+        else [source]
+    )
+    return [
+        save_dir / f"{pdf_path.stem}.jsonl"
+        for pdf_path in pdfs
+        if (save_dir / f"{pdf_path.stem}.jsonl").exists()
+    ]
+
+
+# Convert raw job metadata and logs into a frontend-friendly report.
+
+def build_background_job_report(job: dict[str, Any], log: str) -> dict[str, Any]:
+    command = [str(value) for value in job.get("command", [])]
+    kind = str(job.get("kind") or "unknown")
+    elapsed = None
+    if job.get("started_at") is not None:
+        elapsed = float(job.get("finished_at") or time.time()) - float(
+            job["started_at"]
+        )
+    report: dict[str, Any] = {
+        "run": {
+            "id": job.get("id"),
+            "kind": kind,
+            "status": job.get("status"),
+            "created_at": job.get("created_at"),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
+            "return_code": job.get("return_code"),
+        },
+        "configuration": {},
+        "stage_outputs": {},
+        "artifacts": [],
+    }
+
+    if kind == "ingest":
+        source = _command_positional_after(command, "ingest")
+        mineru_mode = _command_option(command, "--mineru-mode", "off")
+        parser_config_path = _command_option(command, "--parser-config")
+        parser_config: dict[str, Any] | None = None
+        if parser_config_path and Path(parser_config_path).exists():
+            try:
+                parser_config = json.loads(
+                    Path(parser_config_path).read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                parser_config = None
+
+        produced = [
+            {"chunks": int(chunks), "pages": int(pages)}
+            for chunks, pages in re.findall(
+                r"Produced (\d+) chunks from (\d+) pages",
+                log,
+            )
+        ]
+        embedded = [
+            {"chunks": int(chunks), "document": document.strip()}
+            for chunks, document in re.findall(
+                r"Embedded and upserted (\d+) chunks from ([^\r\n]+)",
+                log,
+            )
+        ]
+        completed = re.findall(
+            r"Ingest complete: (\d+) chunks across (\d+) document\(s\) into '([^']+)'",
+            log,
+        )
+        report["configuration"] = {
+            "source": source,
+            "collection": _command_option(command, "--collection", "DocumentChunks"),
+            "embedding_model": _command_option(
+                command,
+                "--embed-model",
+                "embeddinggemma",
+            ),
+            "embedding_batch_size": int(
+                _command_option(command, "--batch-size", 32)
+            ),
+            "ollama_host": _command_option(
+                command,
+                "--host",
+                "http://localhost:11434",
+            ),
+            "parser_config_file": parser_config_path,
+            "resolved_parser_config": parser_config
+            or {
+                "max_tokens": int(
+                    _command_option(command, "--max-tokens", 400)
+                ),
+                "overlap_tokens": int(
+                    _command_option(command, "--overlap-tokens", 60)
+                ),
+            },
+            "mineru": {
+                "enabled": mineru_mode != "off",
+                "mode": mineru_mode,
+                "model": _command_option(command, "--mineru-model"),
+                "device": _command_option(command, "--mineru-device", "auto"),
+                "dpi": _command_option(command, "--mineru-dpi"),
+                "maximum_pages": _command_option(
+                    command,
+                    "--mineru-max-pages",
+                ),
+                "forced_pages": _command_option(command, "--mineru-pages"),
+                "cache_directory": _command_option(
+                    command,
+                    "--mineru-cache-dir",
+                ),
+            },
+            "saved_jsonl_directory": _command_option(
+                command,
+                "--save-jsonl",
+            ),
+        }
+        report["stage_outputs"] = {
+            "parse": {
+                "progress": detect_progress(log),
+                "documents_reported": produced,
+                "output_chunks": sum(item["chunks"] for item in produced),
+                "output_pages": sum(item["pages"] for item in produced),
+            },
+            "mineru": {
+                "enabled": mineru_mode != "off",
+                "progress": (
+                    detect_progress(log)
+                    if "[mineru " in log
+                    else None
+                ),
+                "memory_released_before_embedding": (
+                    "memory was released before embedding" in log
+                    or "unloaded" in log.lower()
+                ),
+            },
+            "embed_and_upsert": {
+                "progress": (
+                    detect_progress(log)
+                    if "[embed " in log
+                    else None
+                ),
+                "documents": embedded,
+                "chunks_upserted": sum(item["chunks"] for item in embedded),
+                "collection": (
+                    completed[-1][2]
+                    if completed
+                    else _command_option(
+                        command,
+                        "--collection",
+                        "DocumentChunks",
+                    )
+                ),
+                "completed_summary": (
+                    {
+                        "chunks": int(completed[-1][0]),
+                        "documents": int(completed[-1][1]),
+                    }
+                    if completed
+                    else None
+                ),
+            },
+        }
+        report["artifacts"] = [
+            _saved_chunk_summary(path)
+            for path in _ingest_artifact_paths(command)
+        ]
+
+    elif kind == "eval":
+        dataset = _command_positional_after(command, "eval")
+        output_path = _command_option(command, "--output")
+        report["configuration"] = {
+            "dataset": dataset,
+            "question_limit": _command_option(command, "--limit"),
+            "sample_seed": _command_option(command, "--sample-seed"),
+            "stages": _command_option_values(command, "--stages"),
+            "metrics": _command_option_values(command, "--metrics"),
+            "reranker_model": _command_option(command, "--rerank-model"),
+            "reranker_device": _command_option(
+                command,
+                "--rerank-device",
+                "auto",
+            ),
+            "answer_model": _command_option(command, "--answer-model"),
+            "judge_model": _command_option(command, "--judge-model"),
+            "judge_temperature": _command_option(
+                command,
+                "--judge-temperature",
+            ),
+            "judge_thinking": "--judge-thinking" in command,
+            "judge_timeout_seconds": _command_option(
+                command,
+                "--judge-timeout",
+            ),
+        }
+        stage_outputs: dict[str, Any] = {}
+        for phase in ("retrieve", "rerank", "generate", "judge"):
+            matches = re.findall(
+                rf"\[{phase}\s+(\d+)/(\d+)\]",
+                log,
+            )
+            stage_outputs[phase] = {
+                "completed": int(matches[-1][0]) if matches else 0,
+                "total": int(matches[-1][1]) if matches else 0,
+            }
+        report["stage_outputs"] = stage_outputs
+        if output_path and Path(output_path).exists():
+            artifact: dict[str, Any] = {
+                "path": output_path,
+                "bytes": Path(output_path).stat().st_size,
+            }
+            try:
+                payload = json.loads(
+                    Path(output_path).read_text(encoding="utf-8")
+                )
+                artifact["top_level_keys"] = (
+                    sorted(payload)
+                    if isinstance(payload, dict)
+                    else []
+                )
+                if isinstance(payload, dict):
+                    for key in ("summary", "aggregate", "metrics", "scores"):
+                        if key in payload:
+                            artifact[key] = payload[key]
+            except (OSError, json.JSONDecodeError):
+                artifact["readable_json"] = False
+            report["artifacts"] = [artifact]
+
+    else:
+        report["configuration"] = {"command": command}
+
+    return report
+
+
+def _status_badge(ok: bool, label: str) -> str:
+    color = "#34d399" if ok else "#fb7185"
+    text = "online" if ok else "offline"
+    return (
+        f"<span class='service-pill'><span style='color:{color}'>*</span> "
+        f"{label} {text}</span>"
+    )
+
+
+# Keep visual styling in one place so the workspace pages stay consistent.
+
+def apply_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --ink: var(--text-color);
+            --muted: color-mix(in srgb, var(--text-color) 66%, transparent);
+            --panel: var(--secondary-background-color);
+            --line: var(--border-color);
+            --accent: var(--primary-color);
+            --accent-soft: color-mix(in srgb, var(--primary-color) 11%, var(--panel));
+            --success: #2F9E6D;
+            --danger: #D94C4C;
+        }
+        .stApp {
+            background:
+                radial-gradient(circle at 7% 3%, color-mix(in srgb, var(--primary-color) 8%, transparent), transparent 28rem),
+                var(--background-color);
+            color: var(--ink);
+        }
+        .main .block-container { max-width: 1480px; padding-top: 1.15rem; padding-bottom: 3rem; }
+        [data-testid="stSidebar"] {
+            background: var(--secondary-background-color);
+            border-right: 1px solid var(--line);
+            min-width: 18.25rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            padding: .55rem .55rem 1rem;
+        }
+        .sidebar-brand { display: flex; align-items: center; gap: .65rem; margin: .2rem 0 1rem; }
+        .sidebar-brand .mini-mark {
+            display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: .6rem;
+            background: var(--accent); color: white;
+            font: 800 .8rem/1 "Roboto Mono", ui-monospace, monospace;
+            box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 28%, transparent);
+        }
+        .sidebar-brand strong { display: block; letter-spacing: .04em; }
+        .sidebar-brand small { color: var(--muted); font-size: .68rem; }
+        .sidebar-section-label {
+            margin: 1rem 0 .35rem; color: var(--muted);
+            font: 750 .6rem/1 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: .14em; text-transform: uppercase;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] { gap: .12rem; }
+        [data-testid="stSidebar"] div[role="radiogroup"] label {
+            padding: .58rem .68rem; border: 1px solid transparent;
+            border-radius: .72rem; transition: background .16s ease, border-color .16s ease;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+            background: color-mix(in srgb, var(--accent) 7%, transparent);
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+            border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+            background: var(--accent-soft);
+        }
+        .app-masthead {
+            display: flex; align-items: flex-end; justify-content: space-between;
+            gap: 1.5rem; padding: 1rem 0 1.15rem;
+        }
+        .brand-lockup { display: flex; align-items: center; gap: .85rem; }
+        .brand-mark {
+            display: grid; place-items: center; width: 3.35rem; height: 3.35rem;
+            flex: 0 0 auto; border-radius: 1rem; color: white;
+            background: linear-gradient(145deg, var(--accent), #777AF6);
+            box-shadow: 0 13px 30px color-mix(in srgb, var(--accent) 28%, transparent);
+        }
+        .brand-mark svg { width: 2rem; height: 2rem; }
+        .brand-word {
+            font: 800 clamp(1.18rem, 2vw, 1.55rem)/1.05 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: -.045em;
+        }
+        .brand-word span { color: var(--accent); }
+        .brand-sub {
+            margin-top: .28rem; color: var(--muted);
+            font: 650 .64rem/1.2 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: .12em; text-transform: uppercase;
+        }
+        .masthead-copy { max-width: 36rem; color: var(--muted); font-size: .9rem; text-align: right; }
+        [class*="st-key-workspace_canvas"] { min-width: 0; padding: 0 .25rem 1rem 0; }
+        [class*="st-key-operations_rail"] {
+            min-width: 0; padding: .82rem; border: 1px solid var(--line);
+            border-radius: 1rem; background: color-mix(in srgb, var(--panel) 94%, transparent);
+            box-shadow: 0 14px 36px color-mix(in srgb, var(--ink) 6%, transparent);
+        }
+        .operations-title {
+            display: flex; align-items: flex-start; justify-content: space-between;
+            gap: .6rem; margin: .05rem 0 .7rem;
+        }
+        .operations-title small {
+            display: block; color: var(--accent);
+            font: 750 .58rem/1 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: .13em; text-transform: uppercase;
+        }
+        .operations-title strong { display: block; margin-top: .3rem; font-size: .9rem; }
+        .operations-title span { color: var(--muted); font-size: .62rem; }
+        .rail-job {
+            margin: .42rem 0; padding: .58rem .62rem; border: 1px solid var(--line);
+            border-radius: .72rem; background: color-mix(in srgb, var(--panel) 82%, var(--background-color));
+        }
+        .rail-job-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+        .rail-job b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .69rem; }
+        .rail-job em {
+            flex: 0 0 auto; color: var(--muted); font: 700 .52rem/1 "Roboto Mono", ui-monospace, monospace;
+            font-style: normal; letter-spacing: .08em; text-transform: uppercase;
+        }
+        .rail-job small { display: block; margin-top: .27rem; color: var(--muted); font-size: .58rem; }
+        .rail-metrics { margin-top: .75rem; }
+        .rail-metrics-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .48rem; }
+        .rail-metrics-head b { font-size: .74rem; }
+        .rail-metrics-head span { color: var(--muted); font: .56rem/1 "Roboto Mono", ui-monospace, monospace; }
+        .rail-service-row { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .5rem; }
+        .rail-service {
+            display: inline-flex; align-items: center; gap: .3rem; padding: .25rem .4rem;
+            border: 1px solid var(--line); border-radius: 999px; color: var(--muted);
+            font: 650 .55rem/1 "Roboto Mono", ui-monospace, monospace;
+        }
+        .rail-service i { width: .38rem; height: .38rem; border-radius: 50%; background: var(--danger); }
+        .rail-service.online i { background: var(--success); }
+        .rail-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .38rem; }
+        .rail-metric {
+            min-width: 0; padding: .52rem; border: 1px solid var(--line); border-radius: .68rem;
+            background: color-mix(in srgb, var(--panel) 80%, var(--background-color));
+        }
+        .rail-metric span, .rail-metric small { display: block; color: var(--muted); }
+        .rail-metric span { font: 700 .52rem/1 "Roboto Mono", ui-monospace, monospace; text-transform: uppercase; }
+        .rail-metric b { display: block; margin: .3rem 0 .18rem; font-size: .86rem; }
+        .rail-metric small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .52rem; }
+        .system-dock {
+            width: 100%; padding: 1rem; border: 1px solid var(--line);
+            border-radius: 1.1rem;
+            background:
+                linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, var(--panel)), var(--panel) 42%),
+                var(--panel);
+            box-shadow: 0 14px 36px color-mix(in srgb, var(--ink) 7%, transparent);
+            backdrop-filter: blur(12px); margin: 0 0 .85rem;
+        }
+        .system-dock-head {
+            display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 1rem; margin-bottom: .85rem;
+        }
+        .system-title strong {
+            display: block; margin-top: .24rem; font-size: 1rem; letter-spacing: -.02em;
+        }
+        .system-title small { display: block; margin-top: .2rem; color: var(--muted); font-size: .7rem; }
+        .system-kicker {
+            color: var(--accent); font: 750 .62rem/1 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: .14em; text-transform: uppercase;
+        }
+        .service-cluster { display: flex; justify-content: flex-end; gap: .4rem; flex-wrap: wrap; }
+        .service-state {
+            display: inline-flex; align-items: center; gap: .38rem; padding: .3rem .52rem;
+            border: 1px solid var(--line); border-radius: 99px; color: var(--muted);
+            background: color-mix(in srgb, var(--panel) 92%, transparent);
+            font: 650 .64rem/1 "Roboto Mono", ui-monospace, monospace;
+        }
+        .service-state i { width: .42rem; height: .42rem; border-radius: 50%; background: var(--danger); }
+        .service-state.online i {
+            background: var(--success);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+        }
+        .system-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .55rem; }
+        .system-metric {
+            min-width: 0; padding: .68rem .72rem;
+            border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+            border-radius: .82rem;
+            background: color-mix(in srgb, var(--panel) 84%, var(--background-color));
+        }
+        .system-metric span, .system-metric small { display: block; color: var(--muted); }
+        .system-metric span {
+            font: 650 .61rem/1.15 "Roboto Mono", ui-monospace, monospace;
+            text-transform: uppercase; letter-spacing: .09em;
+        }
+        .system-metric strong {
+            display: block; margin: .3rem 0 .14rem; font-size: 1.08rem; letter-spacing: -.025em;
+        }
+        .system-metric small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .62rem; }
+        .metric-track {
+            height: 3px; overflow: hidden; margin-top: .5rem; border-radius: 9px;
+            background: color-mix(in srgb, var(--line) 65%, transparent);
+        }
+        .metric-track i {
+            display: block; height: 100%; border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent), #8F66E8);
+        }
+        .loaded-models {
+            margin-top: .62rem; color: var(--muted);
+            font: .61rem/1.2 "Roboto Mono", ui-monospace, monospace;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .workspace-rail {
+            display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: .55rem; margin: .7rem 0 .8rem;
+        }
+        .workspace-card {
+            min-width: 0; padding: .7rem .75rem;
+            border: 1px solid var(--line); border-radius: .88rem;
+            background: color-mix(in srgb, var(--panel) 91%, transparent);
+            box-shadow: 0 7px 20px color-mix(in srgb, var(--ink) 4%, transparent);
+        }
+        .workspace-card.active {
+            border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+            background: var(--accent-soft);
+            box-shadow: 0 9px 24px color-mix(in srgb, var(--accent) 12%, transparent);
+        }
+        .workspace-card-head { display: flex; align-items: center; justify-content: space-between; gap: .45rem; }
+        .workspace-card i {
+            display: grid; place-items: center; width: 1.55rem; height: 1.55rem;
+            border-radius: .48rem; background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+            color: var(--accent); font: 800 .58rem/1 "Roboto Mono", ui-monospace, monospace;
+            font-style: normal;
+        }
+        .workspace-card.active i { background: var(--accent); color: white; }
+        .workspace-card b {
+            display: block; margin-top: .52rem; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; font-size: .75rem;
+        }
+        .workspace-card small {
+            display: block; margin-top: .18rem; color: var(--muted);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .62rem;
+        }
+        .workspace-card em {
+            color: var(--muted); font: 650 .56rem/1 "Roboto Mono", ui-monospace, monospace;
+            font-style: normal; text-transform: uppercase; letter-spacing: .07em;
+        }
+        div[data-testid="stPills"] [role="radiogroup"] {
+            display: flex; flex-wrap: nowrap; gap: .35rem; overflow-x: auto; padding: .35rem;
+            border: 1px solid var(--line); border-radius: 1rem;
+            background: color-mix(in srgb, var(--panel) 92%, transparent);
+            scrollbar-width: none; scroll-snap-type: x proximity; scroll-behavior: smooth;
+            box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 5%, transparent);
+        }
+        div[data-testid="stPills"] [role="radiogroup"]::-webkit-scrollbar { display: none; }
+        div[data-testid="stPills"] button {
+            flex: 1 0 max-content; justify-content: center; min-height: 2.55rem;
+            border-radius: .72rem !important; scroll-snap-align: center;
+            transition: transform .2s ease, background .2s ease, color .2s ease;
+        }
+        div[data-testid="stPills"] button:hover { transform: translateY(-1px); }
+        div[data-testid="stPills"] button[aria-checked="true"] {
+            box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 18%, transparent);
+        }
+        .section-heading { margin: 1.35rem 0 .85rem; }
+        .section-heading small {
+            color: var(--accent);
+            font: 750 .66rem/1 "Roboto Mono", ui-monospace, monospace;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }
+        .section-heading h1 {
+            margin: .38rem 0 .2rem;
+            font-size: clamp(1.65rem, 3vw, 2.3rem);
+            letter-spacing: -.045em;
+        }
+        .section-heading p { max-width: 48rem; margin: 0; color: var(--muted); }
+        div[data-testid="stMetric"] {
+            background: var(--panel); border: 1px solid var(--line); padding: .8rem 1rem;
+            border-radius: .9rem; box-shadow: 0 7px 22px color-mix(in srgb, var(--ink) 4%, transparent);
+        }
+        div[data-testid="stForm"], div[data-testid="stExpander"] { border-color: var(--line); border-radius: 1rem; }
+        .soft-card {
+            background: var(--panel); border: 1px solid var(--line);
+            border-radius: 1rem; padding: 1rem 1.1rem; color: var(--ink);
+        }
+        .answer-card {
+            border-left: 4px solid var(--accent); border-radius: .9rem;
+            padding: 1.1rem 1.25rem; background: var(--accent-soft);
+            color: var(--ink); margin: .6rem 0 1rem;
+        }
+        .privacy-note { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+        div[data-testid="stCodeBlock"] pre { max-height: 430px; overflow-y: auto; }
+        .stButton > button, .stFormSubmitButton > button { border-radius: 12px; }
+        @media (prefers-reduced-motion: no-preference) {
+            [class*="st-key-section_"] { animation: sectionEnter .24s ease-out; }
+            @keyframes sectionEnter {
+                from { opacity: .35; transform: translateY(5px); }
+                to { opacity: 1; transform: none; }
+            }
+        }
+        @media (min-width: 1121px) {
+            [class*="st-key-operations_rail"] {
+                position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto;
+            }
+        }
+        @media (max-width: 1120px) {
+            .system-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .workspace-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (max-width: 820px) {
+            .main .block-container { padding: .7rem .8rem 2.5rem; }
+            .app-masthead { align-items: flex-start; padding-top: .55rem; }
+            .masthead-copy { max-width: 19rem; font-size: .78rem; }
+            .system-dock { width: 100%; }
+            .system-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .workspace-rail {
+                display: flex; overflow-x: auto; padding-bottom: .2rem;
+                scroll-snap-type: x proximity; scrollbar-width: none;
+            }
+            .workspace-rail::-webkit-scrollbar { display: none; }
+            .workspace-card { flex: 0 0 9.5rem; scroll-snap-align: start; }
+            div[data-testid="stPills"] button { flex: 0 0 auto; min-width: 7.4rem; }
+            [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+                min-width: min(100%, 18rem) !important; flex: 1 1 18rem !important;
+            }
+        }
+        @media (max-width: 520px) {
+            .app-masthead { display: block; }
+            .masthead-copy { max-width: none; margin-top: .75rem; text-align: left; }
+            .brand-mark { width: 2.85rem; height: 2.85rem; border-radius: .85rem; }
+            .brand-word { font-size: 1.12rem; }
+            .system-dock-head { display: block; }
+            .service-cluster { justify-content: flex-start; margin-top: .7rem; }
+            .system-grid { gap: .4rem; }
+            .system-metric { padding: .55rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_brand_header() -> None:
+    st.markdown(
+        """
+        <header class="app-masthead">
+          <div class="brand-lockup">
+            <div class="brand-mark" aria-label="RAG Studio logo">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                <path d="M8 6.5h11l5 5V25.5H8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M19 6.5v5h5M12 16h8M12 20h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="8" cy="6.5" r="2.5" fill="currentColor"/>
+              </svg>
+            </div>
+            <div>
+              <div class="brand-word">RAG<span>//</span>STUDIO</div>
+              <div class="brand-sub">Local intelligence workspace</div>
+            </div>
+          </div>
+          <div class="masthead-copy">Parse, retrieve, evaluate, and curate one private knowledge system from a focused operations console.</div>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_heading(kicker: str, title: str, description: str) -> None:
+    st.markdown(
+        (
+            '<header class="section-heading">'
+            f"<small>{html.escape(kicker)}</small>"
+            f"<h1>{html.escape(title)}</h1>"
+            f"<p>{html.escape(description)}</p>"
+            "</header>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_workspace_rail(active_section: str) -> None:
+    """Keep the full product surface visible without duplicating controls."""
+    jobs = list_jobs()
+    active_jobs = sum(
+        job.get("status") in {"queued", "running"}
+        for job in jobs
+    )
+    golden_records = len(load_jsonl(DEFAULT_DATASET))
+    cards = [
+        ("Assistant", "01", "Assistant", "Hybrid retrieval + cited answers"),
+        ("Evaluation", "02", "Evaluation", f"{len(METRICS)} quality metrics"),
+        ("Ingestion", "03", "Ingestion", "Parse, review, and index"),
+        ("Golden dataset", "04", "Golden dataset", f"{golden_records} benchmark records"),
+        ("Run history", "05", "Run history", f"{active_jobs} active background jobs"),
+    ]
+    rendered = []
+    for key, index, label, detail in cards:
+        state = " active" if key == active_section else ""
+        current = ' aria-current="page"' if key == active_section else ""
+        rendered.append(
+            f'<article class="workspace-card{state}"{current}>'
+            '<div class="workspace-card-head">'
+            f'<i>{html.escape(index)}</i><em>{html.escape(key)}</em>'
+            '</div>'
+            f'<b>{html.escape(label)}</b>'
+            f'<small>{html.escape(detail)}</small>'
+            '</article>'
+        )
+    st.markdown(
+        '<section class="workspace-rail" aria-label="RAG workspaces">'
+        + "".join(rendered)
+        + "</section>",
+        unsafe_allow_html=True,
+    )
+
+
+@st.fragment(run_every=3)
+def render_telemetry(host: str) -> None:
+    snapshot = get_system_snapshot(host, ROOT)
+    gpu = snapshot["gpus"][0] if snapshot["gpus"] else None
+    jobs = list_jobs()
+    active_jobs = sum(
+        job.get("status") in {"queued", "running"}
+        for job in jobs
+    )
+    model_count = len(snapshot["ollama_models"])
+    accelerator_label = "GPU" if gpu else "Process"
+    accelerator_value = (
+        f"{gpu['utilization']:.0f}%"
+        if gpu
+        else f"{snapshot['process_memory_gb']:.1f} GB"
+    )
+    accelerator_detail = (
+        f"{html.escape(gpu['name'])} · {gpu['temperature_c']:.0f}°C"
+        if gpu
+        else "App resident memory"
+    )
+    accelerator_percent = (
+        gpu["utilization"]
+        if gpu
+        else min(
+            snapshot["process_memory_gb"] / max(snapshot["memory_total_gb"], 1) * 100,
+            100,
+        )
+    )
+    models = ", ".join(
+        html.escape(model.get("name", "unknown"))
+        for model in snapshot["ollama_models"]
+    )
+    ollama_state = "online" if snapshot["ollama_ok"] else "offline"
+    weaviate_state = "online" if snapshot["weaviate_ok"] else "offline"
+
+    def metric_card(
+        label: str, value: str, detail: str, percent: float
+    ) -> str:
+        width = min(max(percent, 0.0), 100.0)
+        return (
+            '<div class="system-metric">'
+            f'<span>{label}</span><strong>{value}</strong><small>{detail}</small>'
+            '<div class="metric-track">'
+            f'<i style="width:{width:.1f}%"></i></div></div>'
+        )
+
+    st.markdown(
+        f"""
+        <section class="system-dock">
+          <div class="system-dock-head">
+            <div class="system-title">
+              <span class="system-kicker">Local runtime</span>
+              <strong>System pulse and service readiness</strong>
+              <small>Live hardware, model, vector store, and background-worker health.</small>
+            </div>
+            <div class="service-cluster">
+              <span class="service-state {ollama_state}"><i></i>Ollama</span>
+              <span class="service-state {weaviate_state}"><i></i>Weaviate</span>
+            </div>
+          </div>
+          <div class="system-grid">
+            {metric_card("CPU", f"{snapshot['cpu_percent']:.0f}%", f"{snapshot['cpu_count']} logical cores", snapshot["cpu_percent"])}
+            {metric_card("Memory", f"{snapshot['memory_percent']:.0f}%", f"{snapshot['memory_used_gb']:.1f} / {snapshot['memory_total_gb']:.1f} GB", snapshot["memory_percent"])}
+            {metric_card("Disk", f"{snapshot['disk_percent']:.0f}%", "Workspace volume", snapshot["disk_percent"])}
+            {metric_card(accelerator_label, accelerator_value, accelerator_detail, accelerator_percent)}
+            {metric_card("Active runs", str(active_jobs), f"{len(jobs)} tracked runs", min(active_jobs * 25, 100))}
+            {metric_card("Models", str(model_count), "Loaded in Ollama", min(model_count * 25, 100))}
+          </div>
+          <div class="loaded-models">
+            {f"Resident models: {models}" if models else "No Ollama model currently resident"}
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.fragment(run_every=2)
+def render_job_monitor(limit: int = 6) -> None:
+    all_jobs = list_jobs()
+    jobs = all_jobs[:limit]
+    if not jobs:
+        st.info("No background runs yet. Start an evaluation or ingestion job.")
+        return
+    for job in jobs:
+        icon = {"queued": "~", "running": ">", "completed": "+", "failed": "!"}.get(job.get("status"), "-")
+        with st.expander(f'{icon} {job.get("label", job.get("kind"))} | {job.get("status", "unknown")}', expanded=job.get("status") == "running"):
+            log = read_log(job)
+            progress, progress_text = estimate_job_progress(job, log, all_jobs)
+            st.progress(progress, text=progress_text)
+
+            report = build_background_job_report(job, log)
+            st.markdown("##### Structured stage outputs")
+            st.caption(
+                "Configuration, per-stage counts, model strategy, indexed chunks, "
+                "token statistics, and generated artifacts."
+            )
+            if report["artifacts"]:
+                st.dataframe(
+                    [
+                        {
+                            "Artifact": Path(item["path"]).name,
+                            "Chunks": item.get("chunks", "—"),
+                            "Tokens": item.get("total_tokens", "—"),
+                            "Token range": (
+                                f"{item.get('minimum_tokens', 0)}–"
+                                f"{item.get('maximum_tokens', 0)}"
+                                if "minimum_tokens" in item
+                                else "—"
+                            ),
+                            "Size": _format_bytes(int(item.get("bytes", 0))),
+                            "Path": item["path"],
+                        }
+                        for item in report["artifacts"]
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+            st.json(report, expanded=False)
+            st.download_button(
+                "Download complete run report · JSON",
+                data=json.dumps(
+                    report,
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8"),
+                file_name=f"{job.get('id', 'run')}.report.json",
+                mime="application/json",
+                width="stretch",
+                key=f"job_report_{job.get('id', 'unknown')}",
+            )
+
+            st.markdown("##### Complete command log")
+            st.code(log, language="bash")
+            if job.get("return_code") is not None:
+                st.caption(f'Return code: {job["return_code"]}')
+
+
+# Shape query details into a stable report that another frontend can also use.
+
+def build_query_output_report(
+    result: dict[str, Any],
+    configuration: dict[str, Any],
+    logs: Sequence[str],
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    retrieved_matches = re.findall(
+        r"retrieved (\d+) candidates",
+        "\n".join(logs),
+        flags=re.IGNORECASE,
+    )
+    ranked = result.get("ranked") or []
+    passages = []
+    for position, chunk in enumerate(ranked, start=1):
+        metadata = chunk.get("metadata") or {}
+        passages.append(
+            {
+                "rank": position,
+                "chunk_id": metadata.get("chunk_id"),
+                "rerank_score": chunk.get("rerank_score"),
+                "hybrid_score": chunk.get("score"),
+                "token_count": metadata.get("token_count"),
+                "page_start": metadata.get("page_start"),
+                "page_end": metadata.get("page_end"),
+                "breadcrumb": metadata.get("breadcrumb"),
+                "clause_number": metadata.get("clause_number"),
+                "element_type": metadata.get("element_type"),
+                "text": chunk.get("text"),
+            }
+        )
+    answer = result.get("answer") or ""
+    return {
+        "query": result.get("query"),
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "configuration": configuration,
+        "stage_outputs": {
+            "retrieve": {
+                "strategy": "hybrid BM25 + vector",
+                "requested_candidates": configuration.get("retrieve_k"),
+                "retrieved_candidates": (
+                    int(retrieved_matches[-1])
+                    if retrieved_matches
+                    else None
+                ),
+                "semantic_keyword_balance": configuration.get("alpha"),
+                "embedding_model": configuration.get("embed_model"),
+                "collection": configuration.get("collection"),
+            },
+            "rerank": {
+                "model": (result.get("rerank_route") or {}).get("selected_model"),
+                "route": result.get("rerank_route"),
+                "device": configuration.get("rerank_device"),
+                "passages_retained": len(ranked),
+                "passages": passages,
+            },
+            "context_gate": {
+                "threshold": result.get("relevance_threshold"),
+                "top_relevance_score": result.get("top_relevance_score"),
+                "is_relevant": result.get("is_relevant"),
+            },
+            "answer": {
+                "enabled": configuration.get("answer_enabled"),
+                "model": configuration.get("answer_model"),
+                "characters": len(answer),
+                "citation_markers": len(re.findall(r"\[\d+\]", answer)),
+                "text": answer or None,
+            },
+        },
+    }
+
+
+# Interactive questions still run in a worker because model loading can take time.
+
+@st.cache_resource
+def _interactive_query_executor() -> ThreadPoolExecutor:
+    """Use one serialized thread so models remain resident between questions."""
+
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-interactive")
+
+
+def start_interactive_query(
+    query: str,
+    worker_configuration: dict[str, Any],
+    report_configuration: dict[str, Any],
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "logs": [],
+        "answer": "",
+        "phase": "queued",
+        "done": False,
+        "result": None,
+        "elapsed_seconds": 0.0,
+    }
+    future = _interactive_query_executor().submit(
+        run_resident_query,
+        query,
+        worker_configuration,
+        state,
+    )
+    return {
+        "future": future,
+        "state": state,
+        "query": query,
+        "report_configuration": report_configuration,
+    }
+
+
+@st.fragment(run_every=0.5)
+def render_interactive_query_status(job_info: dict[str, Any]) -> None:
+    """Refresh thinking state and streamed answer without rerunning the page."""
+
+    state = job_info["state"]
+    future = job_info["future"]
+    logs = list(state.get("logs", []))
+
+    if future.done():
+        try:
+            result = future.result()
+        except Exception as exc:
+            st.error(f"The interactive query failed: {exc}")
+            if logs:
+                st.code("\n".join(logs), language="bash")
+            if st.button("Dismiss failed query", key="dismiss_failed_query"):
+                st.session_state.pop("active_query_job", None)
+                st.rerun()
+            return
+
+        st.session_state["query_result"] = result
+        st.session_state["query_logs"] = logs
+        st.session_state["query_elapsed"] = state.get("elapsed_seconds", 0.0)
+        st.session_state["query_run_configuration"] = job_info[
+            "report_configuration"
+        ]
+        st.session_state.pop("active_query_job", None)
+        st.rerun()
+        return
+
+    partial_answer = state.get("answer", "")
+    if partial_answer:
+        st.markdown(partial_answer + " ▌")
+        st.caption("Generating answer…")
+    else:
+        latest_phase = next(
+            (line for line in reversed(logs) if line.startswith("[phase")),
+            "Preparing the resident query engine…",
+        )
+        st.status(f"Thinking… {latest_phase}", state="running", expanded=False)
+
+
+def render_query_tab(host: str, collection: str, embed_model: str, golden: list[dict]) -> None:
+    render_section_heading(
+        "Retrieval workspace",
+        "Ask your knowledge base",
+        "Hybrid keyword and semantic retrieval, Qwen3 reranking, and an optional cited answer.",
+    )
+
+    starters = [record["query"] for record in golden]
+    selected_starter = st.selectbox(
+        "Example questions",
+        [""] + starters,
+        format_func=lambda value: value or "Choose an example",
+    )
+
+    with st.expander("Search and model settings", expanded=False):
+        a, b = st.columns(2)
+        retrieve_k = a.slider("Candidates to retrieve", 5, 60, 20)
+        top_n = b.slider("Passages after reranking", 1, min(15, retrieve_k), 5)
+        alpha = st.slider("Semantic to keyword balance", 0.0, 1.0, 0.55, 0.05)
+        relevance_threshold = st.slider("Document relevance gate", 0.01, 0.95, 0.20, 0.01)
+        rerank_model = st.text_input("Lightweight reranker", "Qwen/Qwen3-Reranker-0.6B")
+        heavy_rerank_model = st.text_input("Escalation reranker", "Qwen/Qwen3-Reranker-4B")
+        adaptive_rerank = st.checkbox(
+            "Allow slow 4B escalation",
+            False,
+            help="Off by default for responsive chat. Enable only when reranking quality matters more than latency.",
+        )
+        device = st.selectbox("Reranker device", ["auto", "cuda", "cpu"])
+        answer_model = st.text_input("Answer model", "qwen2.5:1.5b")
+        want_answer = st.checkbox("Generate a grounded answer with citations", True)
+
+    active_query = st.session_state.get("active_query_job")
+    typed_query = st.chat_input(
+        "Ask your knowledge base",
+        disabled=active_query is not None,
+    )
+    use_example = st.button(
+        "Ask selected example",
+        disabled=not selected_starter or active_query is not None,
+        width="stretch",
+    )
+    query = typed_query or (selected_starter if use_example else None)
+
+    if query:
+        worker_configuration = {
+            "collection": collection,
+            "embed_model": embed_model,
+            "host": host,
+            "heavy_rerank_model": heavy_rerank_model,
+            "adaptive_rerank": adaptive_rerank,
+            "rerank_model": rerank_model,
+            "rerank_device": None if device == "auto" else device,
+            "answer_model": answer_model,
+            "retrieve_k": retrieve_k,
+            "alpha": alpha,
+            "top_n": top_n,
+            "answer": want_answer,
+            "relevance_threshold": relevance_threshold,
+        }
+        report_configuration = {
+            "collection": collection,
+            "embed_model": embed_model,
+            "ollama_host": host,
+            "retrieve_k": retrieve_k,
+            "heavy_rerank_model": heavy_rerank_model,
+            "adaptive_rerank": adaptive_rerank,
+            "alpha": alpha,
+            "top_n": top_n,
+            "rerank_model": rerank_model,
+            "rerank_device": device,
+            "relevance_threshold": relevance_threshold,
+            "answer_enabled": want_answer,
+            "answer_model": answer_model,
+        }
+        st.session_state["query_result"] = None
+        st.session_state["query_logs"] = []
+        active_query = start_interactive_query(
+            query.strip(),
+            worker_configuration,
+            report_configuration,
+        )
+        active_query["query"] = query.strip()
+        st.session_state["active_query_job"] = active_query
+        st.rerun()
+
+    result = st.session_state.get("query_result")
+    displayed_query = (
+        active_query.get("query")
+        if active_query is not None
+        else (result or {}).get("query")
+    )
+    if displayed_query:
+        with st.chat_message("user"):
+            st.markdown(displayed_query)
+
+    if active_query is not None:
+        with st.chat_message("assistant", avatar="✨"):
+            render_interactive_query_status(active_query)
+
+    if result:
+        query_report = build_query_output_report(
+            result,
+            st.session_state.get("query_run_configuration", {}),
+            st.session_state.get("query_logs", []),
+            st.session_state.get("query_elapsed", 0),
+        )
+        with st.expander("Complete retrieval, reranking & answer outputs"):
+            st.json(query_report, expanded=True)
+            st.download_button(
+                "Download query run report · JSON",
+                data=json.dumps(
+                    query_report,
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8"),
+                file_name="query-run-report.json",
+                mime="application/json",
+                width="stretch",
+                key="download_query_run_report",
+            )
+        with st.chat_message("assistant", avatar="✨"):
+            if result.get("answer"):
+                st.markdown(result["answer"])
+            elif result.get("is_relevant"):
+                st.markdown("I found relevant passages. Open the sources below to review them.")
+            else:
+                st.markdown("I couldn't find relevant evidence in the available documents.")
+            route = result.get("rerank_route") or {}
+            st.caption(
+                f'{route.get("route", "reranked")} route · '
+                f'{st.session_state.get("query_elapsed", 0):.1f}s'
+            )
+        assessment = assess_candidate(result.get("query", ""), result, golden)
+        if assessment["eligible"]:
+            st.info("This question is grounded, important, non-duplicate, and suitable as a golden candidate.")
+            if st.button("Add to golden candidates", type="primary"):
+                added = append_unique_record(CANDIDATES_PATH, build_candidate(result["query"], result))
+                st.success("Saved for human review.") if added else st.warning("Candidate already exists.")
+        elif result.get("is_relevant"):
+            st.caption("Not suggested for the golden set: " + "; ".join(assessment["reasons"]))
+        for index, chunk in enumerate(result["ranked"], 1):
+            with st.expander(
+                f'Passage {index} | relevance {chunk["rerank_score"]:.3f} | hybrid {chunk["score"]:.3f}',
+                expanded=index == 1,
+            ):
+                st.write(chunk["text"])
+                if chunk.get("metadata"):
+                    st.json(chunk["metadata"], expanded=False)
+    if st.session_state.get("query_logs"):
+        with st.expander("Pipeline log"):
+            st.code("\n".join(st.session_state["query_logs"]), language="bash")
+
+
+def render_eval_tab(host: str, collection: str, embed_model: str) -> None:
+    render_section_heading(
+        "Quality control",
+        "Evaluation studio",
+        "Benchmark the complete RAG pipeline or review uploaded JSON records before admitting them to the golden set.",
+    )
+    mode = st.segmented_control(
+        "Evaluation workflow",
+        ["Run benchmark", "Review JSON candidates"],
+        default="Run benchmark",
+        selection_mode="single",
+        key="evaluation_workflow",
+    )
+    if mode == "Review JSON candidates":
+        render_json_review_workspace(
+            ROOT,
+            ROOT / "golden_dataset.jsonl",
+            BENCHMARK_MANIFEST,
+            CANDIDATES_PATH,
+        )
+    else:
+        _render_benchmark_evaluation(host, collection, embed_model)
+
+
+# Evaluation is a background job because a full benchmark can take several minutes.
+
+def _render_benchmark_evaluation(
+    host: str, collection: str, embed_model: str
+) -> None:
+    st.markdown("### Benchmark the complete RAG")
+    st.caption(
+        "Runs in the background and checkpoints after every judged question, "
+        "so refreshing this page is safe."
+    )
+
+    dataset_path = Path(st.text_input("Golden dataset", str(DEFAULT_DATASET)))
+    if not dataset_path.exists():
+        st.error("The selected dataset does not exist.")
+        return
+    try:
+        dataset_bytes = dataset_path.read_bytes()
+        _, frozen_chunks = load_review_context(
+            str(ROOT),
+            str(ROOT / "golden_dataset.jsonl"),
+            str(BENCHMARK_MANIFEST),
+        )
+        records, dataset_issues = normalize_records_for_evaluation(
+            dataset_bytes,
+            dataset_path.name,
+            frozen_chunks,
+        )
+    except (OSError, json.JSONDecodeError, KeyError, UnicodeError) as exc:
+        st.error(f"Could not normalize the selected dataset: {exc}")
+        return
+
+    for issue in dataset_issues:
+        st.warning(issue)
+    if not records:
+        st.error("No evaluation-ready records were found in the selected dataset.")
+        return
+    normalized_count = sum(
+        bool(record.get("_normalization", {}).get("normalized_for_evaluation"))
+        for record in records
+    )
+    if normalized_count:
+        st.info(
+            f"Normalized {normalized_count} record(s) into the canonical RAG "
+            "evaluation schema. The source file will not be changed."
+        )
+
+    verified = sum(bool(record.get("verified")) for record in records)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Questions", len(records))
+    m2.metric("Verified", verified)
+    m3.metric("Coverage", f'{len(audit_dataset(records)["covered_controls"])}/18 controls')
+
+    with st.form("eval_form"):
+        question_limit = st.slider("Questions to evaluate", 1, len(records), min(5, len(records)))
+        random_sample = st.checkbox("Use a reproducible random sample", True)
+        seed = st.number_input("Sample seed", min_value=0, value=42, disabled=not random_sample)
+        stages = st.multiselect(
+            "Pipeline stages",
+            ["retrieval", "rerank", "answer"],
+            default=["retrieval", "rerank", "answer"],
+        )
+        use_judge = st.checkbox("Run DeepEval with the local qwen3:8b judge", True)
+        metrics = st.multiselect("Judge metrics", METRICS, default=METRICS, disabled=not use_judge)
+        with st.expander("Evaluation models and limits"):
+            c1, c2 = st.columns(2)
+            rerank_model = c1.text_input("Reranker model", "Qwen/Qwen3-Reranker-4B")
+            rerank_device = c2.selectbox(
+                "Reranker device",
+                ["auto", "cuda", "cpu"],
+                index=2,
+                key="eval_device",
+                help="CPU is the background-safe default; choose CUDA when evaluation throughput matters more than foreground latency.",
+            )
+            answer_model = c1.text_input("Answer model", "qwen2.5:1.5b")
+            judge_model = c2.text_input("Judge model", "qwen3:8b")
+            judge_timeout = c1.number_input("Judge timeout per response (seconds)", 0, 7200, 900)
+            judge_keep_alive = c2.text_input("Judge keep-alive", "30m")
+            judge_temperature = c1.number_input(
+                "Judge temperature", min_value=0.0, max_value=2.0, value=0.0, step=0.1,
+                help="Keep at 0 for reproducible grading; higher values increase variation.",
+                disabled=not use_judge,
+            )
+            judge_thinking = c2.checkbox(
+                "Enable Qwen thinking",
+                value=False,
+                help="More reasoning, but slower and potentially less reliable for structured judge output.",
+                disabled=not use_judge,
+            )
+        submitted = st.form_submit_button("Start background evaluation", type="primary", width="stretch")
+
+    selected = (
+        random.Random(int(seed)).sample(records, question_limit)
+        if random_sample else records[:question_limit]
+    )
+    with st.expander("Questions in this run", expanded=False):
+        st.dataframe(
+            [
+                {
+                    "#": index,
+                    "question": record["query"],
+                    "relevant IDs": ", ".join(record.get("relevant_chunk_ids", [])),
+                }
+                for index, record in enumerate(selected, 1)
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+
+    if submitted:
+        if not stages:
+            st.warning("Choose at least one pipeline stage.")
+            return
+        normalized_dir = RUNS_DIR / "normalized-datasets"
+        normalized_dir.mkdir(parents=True, exist_ok=True)
+        dataset_digest = hashlib.sha256(dataset_bytes).hexdigest()[:16]
+        normalized_path = normalized_dir / f"{dataset_path.stem}-{dataset_digest}.jsonl"
+        write_jsonl(normalized_path, records)
+        output = RUNS_DIR / f'eval-{time.strftime("%Y%m%d-%H%M%S")}.json'
+        command = [
+            sys.executable, str(ROOT / "main.py"),
+            "--collection", collection,
+            "--embed-model", embed_model,
+            "--host", host,
+            "eval", str(normalized_path),
+            "--stages", *stages,
+            "--rerank-model", rerank_model,
+            "--answer-model", answer_model,
+            "--judge-model", judge_model,
+            "--judge-timeout", str(judge_timeout),
+            "--judge-keep-alive", judge_keep_alive,
+            "--judge-temperature", str(judge_temperature),
+            "--limit", str(question_limit),
+            "--output", str(output),
+        ]
+        if rerank_device != "auto":
+            command.extend(["--rerank-device", rerank_device])
+        if random_sample:
+            command.extend(["--sample-seed", str(int(seed))])
+        if use_judge and metrics:
+            command.extend(["--metrics", *metrics])
+            if judge_thinking:
+                command.append("--judge-thinking")
+        else:
+            command.append("--skip-judge")
+        start_background_job("eval", f"Evaluation | {question_limit} questions", command)
+        st.success(
+            "Evaluation started at reduced CPU priority. Interactive questions "
+            "continue in their foreground worker."
+        )
+
+    st.markdown("#### Live evaluation runs")
+    render_job_monitor(limit=4)
+
+
+def render_ingest_tab(host: str, collection: str, embed_model: str) -> None:
+    render_section_heading(
+        "Corpus engineering",
+        "Document studio",
+        "Review parsing or launch background indexing with optional MinerU.",
+    )
+    workflow = st.segmented_control(
+        "Workflow",
+        ["Parse & review", "Index to RAG"],
+        default="Parse & review",
+        selection_mode="single",
+        label_visibility="collapsed",
+        key="document_studio_workflow",
+    )
+    if workflow == "Parse & review":
+        render_pdf_parsing_workspace()
+    else:
+        _render_background_ingestion(host, collection, embed_model)
+
+
+# Ingestion runs separately so users can keep using the Assistant.
+
+def _render_background_ingestion(host: str, collection: str, embed_model: str) -> None:
+    st.markdown("### Index local PDFs")
+    st.caption(
+        "Parse, chunk, embed, and upsert in a lower-priority worker while "
+        "interactive answering remains available."
+    )
+    with st.form("ingest_form"):
+        path = st.text_input("PDF file or directory", str(DEFAULT_PDF))
+        benchmark_mode = st.checkbox(
+            "Use frozen benchmark parser configuration",
+            True,
+            help="Locks every parser setting to cis-controls-v8-v1.",
+        )
+        c1, c2, c3 = st.columns(3)
+        max_tokens = c1.number_input("Max chunk tokens", 100, 1200, 400, 25, disabled=benchmark_mode)
+        overlap = c2.number_input("Overlap tokens", 0, 300, 60, 10, disabled=benchmark_mode)
+        batch_size = c3.number_input("Embedding batch", 1, 128, 32)
+        save_dir = st.text_input("Save parsed JSONL copies", str(ROOT / "generated_chunks"))
+        use_mineru = st.checkbox(
+            "Add MinerU2.5 visual supplements",
+            value=False,
+            help="Keeps PyMuPDF chunks and adds validated MinerU chunks for difficult pages.",
+        )
+        with st.expander("MinerU2.5 options", expanded=use_mineru):
+            m1, m2 = st.columns(2)
+            mineru_mode = m1.selectbox("Page selection", ["selective", "all"], disabled=not use_mineru)
+            mineru_device = m2.selectbox(
+                "MinerU device",
+                ["auto", "cuda", "cpu"],
+                index=2,
+                disabled=not use_mineru,
+                help="CPU is the background-safe default; CUDA remains available for dedicated ingestion windows.",
+            )
+            mineru_model = st.text_input(
+                "MinerU model",
+                "opendatalab/MinerU2.5-2509-1.2B",
+                disabled=not use_mineru,
+            )
+            m3, m4 = st.columns(2)
+            mineru_dpi = m3.number_input("Page render DPI", 120, 400, 200, 20, disabled=not use_mineru)
+            mineru_max_pages = m4.number_input("Maximum MinerU pages", 1, 500, 12, disabled=not use_mineru)
+            mineru_pages = st.text_input(
+                "Always include pages",
+                "",
+                placeholder="For example: 4,9-12",
+                disabled=not use_mineru,
+            )
+            st.caption(
+                "Requires uv sync --extra mineru. Results are cached and the "
+                "VLM unloads before embedding starts."
+            )
+        submitted = st.form_submit_button("Start background ingestion", type="primary", width="stretch")
+
+    if submitted:
+        source = Path(path)
+        if not source.exists():
+            st.error("That PDF or directory does not exist.")
+        else:
+            command = [
+                sys.executable, str(ROOT / "main.py"),
+                "--collection", collection,
+                "--embed-model", embed_model,
+                "--host", host,
+                "ingest", str(source),
+                "--max-tokens", str(max_tokens),
+                "--overlap-tokens", str(overlap),
+                "--batch-size", str(batch_size),
+                "--save-jsonl", save_dir,
+            ]
+            if benchmark_mode:
+                command.extend(["--parser-config", str(BENCHMARK_DIR / "parser_config.json")])
+            if use_mineru:
+                command.extend(
+                    [
+                        "--mineru-mode", mineru_mode,
+                        "--mineru-model", mineru_model,
+                        "--mineru-device", mineru_device,
+                        "--mineru-dpi", str(int(mineru_dpi)),
+                        "--mineru-max-pages", str(int(mineru_max_pages)),
+                        "--mineru-cache-dir", str(ROOT / ".mineru_cache"),
+                    ]
+                )
+                if mineru_pages.strip():
+                    command.extend(["--mineru-pages", mineru_pages.strip()])
+            start_background_job("ingest", f"Ingest | {source.name}", command)
+            st.success(
+                "Ingestion started at reduced CPU priority. You can ask "
+                "questions from the Assistant while it runs."
+            )
+    st.warning(
+        "Re-ingest after parser or chunk-ID changes so Weaviate matches "
+        "your evaluation dataset."
+    )
+    render_job_monitor(limit=3)
+
+
+
+# This workspace checks golden-set quality and controls promotions.
+
+def render_dataset_tab() -> None:
+    render_section_heading(
+        "Curation",
+        "Golden dataset health",
+        "Audit coverage, verify the frozen corpus, and promote human-reviewed candidates.",
+    )
+    dataset_path = Path(
+        st.text_input("Dataset to inspect", str(DEFAULT_DATASET), key="audit_dataset_path")
+    )
+    if BENCHMARK_MANIFEST.exists():
+        manifest = json.loads(BENCHMARK_MANIFEST.read_text(encoding="utf-8"))
+        if verify_benchmark(BENCHMARK_MANIFEST, quiet=True):
+            st.success(
+                f'Corpus freeze verified: {manifest["chunk_set_version"]} | '
+                f'{manifest["chunks"]["statistics"]["count"]} chunks'
+            )
+        else:
+            st.error("Corpus freeze verification failed. Resolve drift before editing.")
+        with st.expander("Frozen corpus contract"):
+            st.code(manifest["chunks"]["sha256"], language=None)
+            st.caption(f'Chunks: {manifest["chunks"]["path"]}')
+            st.caption(f'Parser config: {manifest["parser"]["config"]["path"]}')
+
+    try:
+        records = load_jsonl(dataset_path)
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+        st.error(f"This inspector expects canonical JSONL. Details: {exc}")
+        return
+    if not records:
+        st.error("Dataset not found or empty.")
+        return
+
+    audit = audit_dataset(records)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Questions", audit["records"])
+    c2.metric("Verified", f'{audit["verified"]}/{audit["records"]}')
+    c3.metric("Duplicate questions", audit["duplicate_questions"])
+    c4.metric("Controls covered", f'{len(audit["covered_controls"])}/18')
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Question scope**")
+        st.bar_chart(audit["scope_counts"])
+    with right:
+        st.markdown("**Answer shape**")
+        st.bar_chart(audit["answer_type_counts"])
+
+    st.markdown(
+        "**Missing control coverage:** "
+        + (", ".join(map(str, audit["missing_controls"])) or "none")
+    )
+    st.markdown("**Five-per-control review target**")
+    st.dataframe(
+        [
+            {
+                "control": control,
+                "verified aligned": int(audit["control_counts"].get(str(control), 0)),
+                "target": 5,
+                "remaining": max(0, 5 - int(audit["control_counts"].get(str(control), 0))),
+            }
+            for control in range(1, 19)
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+    st.dataframe(
+        [
+            {
+                "question": record["query"],
+                "relevant IDs": ", ".join(record.get("relevant_chunk_ids", [])),
+                "scope": (record.get("_eval") or {}).get("scope", "unclassified"),
+                "alignment": (record.get("_eval") or {}).get("alignment_score", "not audited"),
+            }
+            for record in records
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    candidates = load_jsonl(CANDIDATES_PATH)
+    st.markdown("#### Golden candidates awaiting review")
+    if not candidates:
+        st.info("No candidates yet. Strong Assistant questions appear here.")
+    else:
+        selected_index = st.selectbox(
+            "Candidate",
+            range(len(candidates)),
+            format_func=lambda index: candidates[index]["query"],
+        )
+        candidate = candidates[selected_index]
+        st.caption(
+            f'Proposed chunk: {", ".join(candidate.get("relevant_chunk_ids", []))} | '
+            f'confidence {candidate.get("_candidate", {}).get("top_relevance_score", 0):.3f}'
+        )
+        reviewed_answer = st.text_area(
+            "Review and correct the reference answer",
+            candidate.get("reference_answer", ""),
+            height=120,
+        )
+        reviewed_source = st.text_area(
+            "Review the supporting source passage",
+            candidate.get("source_text", ""),
+            height=150,
+        )
+        confirm = st.checkbox(
+            "I verified this question, answer, source passage, and chunk ID"
+        )
+        if st.button("Promote verified candidate to golden dataset", disabled=not confirm):
+            promoted = promote_candidate(
+                CANDIDATES_PATH,
+                selected_index,
+                ROOT / "golden_dataset.jsonl",
+                reviewed_answer,
+                reviewed_source,
+            )
+            if promoted:
+                st.success("Promoted. Rebuild the optimized set before benchmarking.")
+                st.rerun()
+            else:
+                st.warning("Could not promote; it may duplicate an existing question.")
+
+    st.markdown("#### Rebuild the safe optimized set")
+    if st.button("Optimize from the verified source set", type="primary"):
+        command = [
+            sys.executable,
+            "-m",
+            "scripts.golden_dataset_tools",
+            "optimize",
+            str(ROOT / "golden_dataset.jsonl"),
+            str(DEFAULT_PDF),
+            "--output",
+            str(ROOT / "golden_dataset.optimized.jsonl"),
+        ]
+        start_background_job("dataset", "Optimize golden dataset", command)
+        st.success("Dataset optimization started in the background.")
+
+    rejected_records = load_jsonl(ROOT / "golden_dataset.optimized.rejected.jsonl")
+    if rejected_records:
+        with st.expander(f"{len(rejected_records)} quarantined questions needing repair"):
+            for record in rejected_records:
+                st.write(record["query"])
+                st.caption(json.dumps(record.get("_eval", {}), ensure_ascii=False))
+
+
+
+def _job_option_label(job: dict[str, Any]) -> str:
+    return (
+        f"{job.get('label', job.get('kind', 'Run'))} | "
+        f"{job.get('status', 'unknown')}"
+    )
+
+
+def render_compact_metrics(host: str) -> None:
+    snapshot = get_system_snapshot(host, ROOT)
+    gpu = snapshot["gpus"][0] if snapshot["gpus"] else None
+    jobs = list_jobs()
+    active_jobs = sum(job.get("status") in {"queued", "running"} for job in jobs)
+    accelerator_label = "GPU" if gpu else "App RAM"
+    accelerator_value = (
+        f"{gpu['utilization']:.0f}%"
+        if gpu
+        else f"{snapshot['process_memory_gb']:.1f} GB"
+    )
+    accelerator_detail = (
+        f"{gpu['memory_used_mb'] / 1024:.1f} / "
+        f"{gpu['memory_total_mb'] / 1024:.1f} GB"
+        if gpu
+        else "Resident process"
+    )
+
+    def service(label: str, online: bool) -> str:
+        state = "online" if online else "offline"
+        return (
+            f'<span class="rail-service {state}"><i></i>'
+            f'{html.escape(label)}</span>'
+        )
+
+    def metric(label: str, value: str, detail: str) -> str:
+        return (
+            '<div class="rail-metric">'
+            f'<span>{html.escape(label)}</span>'
+            f'<b>{html.escape(value)}</b>'
+            f'<small>{html.escape(detail)}</small>'
+            '</div>'
+        )
+
+    st.markdown(
+        f"""
+        <section class="rail-metrics">
+          <div class="rail-metrics-head">
+            <b>Runtime metrics</b><span>LIVE / 4S</span>
+          </div>
+          <div class="rail-service-row">
+            {service("Ollama", snapshot["ollama_ok"])}
+            {service("Weaviate", snapshot["weaviate_ok"])}
+          </div>
+          <div class="rail-metric-grid">
+            {metric("CPU", f"{snapshot['cpu_percent']:.0f}%", f"{snapshot['cpu_count']} cores")}
+            {metric("Memory", f"{snapshot['memory_percent']:.0f}%", f"{snapshot['memory_used_gb']:.1f} / {snapshot['memory_total_gb']:.1f} GB")}
+            {metric(accelerator_label, accelerator_value, accelerator_detail)}
+            {metric("Jobs", str(active_jobs), f"{len(jobs)} tracked")}
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.fragment(run_every=4)
+def render_operations_rail(host: str) -> None:
+    jobs = list_jobs()
+    active_jobs = sum(job.get("status") in {"queued", "running"} for job in jobs)
+    st.markdown(
+        f"""
+        <header class="operations-title">
+          <div><small>Operations</small><strong>Runtime activity</strong></div>
+          <span>{active_jobs} active</span>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+    mode = st.segmented_control(
+        "Operations view",
+        ["Jobs", "Logs", "Reports"],
+        default="Jobs",
+        selection_mode="single",
+        label_visibility="collapsed",
+        key="operations_view",
+    ) or "Jobs"
+
+    if not jobs:
+        st.info("No background runs yet.")
+    elif mode == "Jobs":
+        for job in jobs[:6]:
+            log = read_log(job, max_chars=6000)
+            progress, progress_text = estimate_job_progress(job, log, jobs)
+            st.markdown(
+                (
+                    '<div class="rail-job"><div class="rail-job-head">'
+                    f'<b>{html.escape(str(job.get("label", job.get("kind", "Run"))))}</b>'
+                    f'<em>{html.escape(str(job.get("status", "unknown")))}</em>'
+                    '</div>'
+                    f'<small>{html.escape(progress_text)}</small></div>'
+                ),
+                unsafe_allow_html=True,
+            )
+            st.progress(progress, text=None)
+    elif mode == "Logs":
+        selected = st.selectbox(
+            "Background job log",
+            range(len(jobs)),
+            format_func=lambda index: _job_option_label(jobs[index]),
+            label_visibility="collapsed",
+            key="operations_log_job",
+        )
+        job = jobs[int(selected)]
+        st.caption(
+            f'{job.get("kind", "run")} | {job.get("status", "unknown")} | '
+            f'{job.get("id", "unknown")}'
+        )
+        st.code(read_log(job, max_chars=12000), language="bash")
+    else:
+        selected = st.selectbox(
+            "Run report",
+            range(len(jobs)),
+            format_func=lambda index: _job_option_label(jobs[index]),
+            label_visibility="collapsed",
+            key="operations_report_job",
+        )
+        job = jobs[int(selected)]
+        report = build_background_job_report(job, read_log(job))
+        st.json(report, expanded=False)
+        st.download_button(
+            "Download report | JSON",
+            data=json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name=f"{job.get('id', 'run')}.report.json",
+            mime="application/json",
+            width="stretch",
+            key=f"operations_report_{job.get('id', 'unknown')}",
+        )
+
+    st.divider()
+    render_compact_metrics(host)
+
+
+
+# This is the main Streamlit entry point and can remain available beside FastAPI.
+
+def render_app() -> None:
+    st.set_page_config(
+        page_title="RAG Studio - Local Assistant",
+        page_icon="R",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    apply_theme()
+
+    navigation = [
+        "Assistant",
+        "Ingestion",
+        "Parsing review",
+        "Evaluation benchmarks",
+        "JSON candidate review",
+        "Dataset curation",
+        "Run history",
+    ]
+    navigation_labels = {
+        "Assistant": "01  Assistant",
+        "Ingestion": "02  Ingestion",
+        "Parsing review": "03  Parsing review",
+        "Evaluation benchmarks": "04  Evaluation benchmarks",
+        "JSON candidate review": "05  JSON candidate review",
+        "Dataset curation": "06  Dataset curation",
+        "Run history": "07  Run history",
+    }
+
+    with st.sidebar:
+        st.markdown(
+            """
+            <div class="sidebar-brand">
+              <div class="mini-mark">R//</div>
+              <div><strong>RAG Studio</strong><small>Local intelligence workspace</small></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="sidebar-section-label">Workspace</div>',
+            unsafe_allow_html=True,
+        )
+        section = st.radio(
+            "Workspace feature",
+            navigation,
+            format_func=lambda value: navigation_labels[value],
+            label_visibility="collapsed",
+            key="workspace_navigation",
+        )
+        jobs = list_jobs()
+        active_jobs = sum(job.get("status") in {"queued", "running"} for job in jobs)
+        st.caption(
+            f"{len(load_jsonl(DEFAULT_DATASET))} golden records | "
+            f"{active_jobs} active jobs"
+        )
+        st.divider()
+        with st.expander("Runtime configuration"):
+            host = st.text_input(
+                "Ollama host",
+                "http://localhost:11434",
+                key="runtime_ollama_host",
+            )
+            collection = st.text_input(
+                "Weaviate collection",
+                "DocumentChunks",
+                key="runtime_collection",
+            )
+            embed_model = st.text_input(
+                "Embedding model",
+                "embeddinggemma",
+                key="runtime_embed_model",
+            )
+        st.markdown(
+            """
+            <div class="privacy-note">
+              <b>Local by default.</b><br>
+              Model inference, documents, evaluation records, logs, and reports
+              remain on this machine.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    render_brand_header()
+    workspace_column, operations_column = st.columns([3.35, 1], gap="large")
+    golden = load_jsonl(DEFAULT_DATASET)
+
+    with workspace_column:
+        with st.container(key="workspace_canvas"):
+            if section == "Assistant":
+                render_query_tab(host, collection, embed_model, golden)
+            elif section == "Ingestion":
+                render_section_heading(
+                    "Corpus engineering",
+                    "Ingestion workspace",
+                    "Index PDFs with stable chunk IDs and optional MinerU supplements.",
+                )
+                _render_background_ingestion(host, collection, embed_model)
+            elif section == "Parsing review":
+                render_section_heading(
+                    "Corpus engineering",
+                    "Parsing review",
+                    "Inspect pages, chunks, metadata, and parser decisions.",
+                )
+                render_pdf_parsing_workspace()
+            elif section == "Evaluation benchmarks":
+                render_section_heading(
+                    "Quality control",
+                    "Evaluation benchmarks",
+                    "Run retrieval, reranking, answer, and judge benchmarks in the background.",
+                )
+                _render_benchmark_evaluation(host, collection, embed_model)
+            elif section == "JSON candidate review":
+                render_section_heading(
+                    "Quality control",
+                    "JSON candidate review",
+                    "Normalize and review candidates against the frozen corpus.",
+                )
+                render_json_review_workspace(
+                    ROOT,
+                    ROOT / "golden_dataset.jsonl",
+                    BENCHMARK_MANIFEST,
+                    CANDIDATES_PATH,
+                )
+            elif section == "Dataset curation":
+                render_dataset_tab()
+            else:
+                render_section_heading(
+                    "Operations",
+                    "Background run history",
+                    "Inspect progress, artifacts, reports, and complete command logs.",
+                )
+                render_job_monitor(limit=20)
+
+    with operations_column:
+        with st.container(key="operations_rail"):
+            render_operations_rail(host)
+

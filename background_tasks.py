@@ -1,0 +1,121 @@
+"""Headless workers for interactive queries and uploaded-PDF parsing."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+import traceback
+from pathlib import Path
+from typing import Any
+
+from main import run_query_pipeline
+
+
+# Write result files atomically so the UI never reads half-written JSON.
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+# This worker runs a query from a saved request and stores a JSON result.
+
+def run_query(request_path: Path, result_path: Path) -> None:
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    configuration = dict(request["configuration"])
+
+    def emit(line: str) -> None:
+        print(line, flush=True)
+
+    started = time.monotonic()
+    result = run_query_pipeline(
+        request["query"],
+        on_line=emit,
+        **configuration,
+    )
+    _write_json(
+        result_path,
+        {
+            "result": result,
+            "configuration": configuration,
+            "elapsed_seconds": time.monotonic() - started,
+        },
+    )
+
+
+# This worker parses uploaded PDFs one at a time and records failures per file.
+
+def run_parse(request_path: Path, result_path: Path) -> None:
+    from parsing_workspace import run_pipeline_bytes
+
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    files = request["files"]
+    config = request["configuration"]
+    results: list[dict[str, Any]] = []
+
+    for index, item in enumerate(files, start=1):
+        source = Path(item["path"])
+        print(f"[parse {index}/{len(files)}] {item['name']}", flush=True)
+
+        def emit(event: dict[str, Any]) -> None:
+            if event.get("event") == "stage":
+                print(
+                    f"[{event.get('stage', 'parse')}] "
+                    f"{event.get('state', 'running')}",
+                    flush=True,
+                )
+            elif event.get("event") == "log":
+                print(event.get("message", ""), flush=True)
+
+        try:
+            started = time.monotonic()
+            result = run_pipeline_bytes(
+                source.read_bytes(),
+                item["name"],
+                config,
+                event_sink=emit,
+            )
+            result["page_count"] = item.get("page_count", 0)
+            result["cache_hit"] = False
+            result["request_time"] = time.monotonic() - started
+            results.append(result)
+        except Exception as exc:
+            print(traceback.format_exc(), flush=True)
+            results.append(
+                {
+                    "file_name": item["name"],
+                    "file_sha256": item["sha256"],
+                    "page_count": item.get("page_count", 0),
+                    "error": str(exc),
+                }
+            )
+
+    _write_json(result_path, results)
+
+
+# The worker CLI is called by the shared background job runner.
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="task", required=True)
+
+    for name in ("query", "parse"):
+        command = subparsers.add_parser(name)
+        command.add_argument("--request", type=Path, required=True)
+        command.add_argument("--result", type=Path, required=True)
+
+    args = parser.parse_args()
+    if args.task == "query":
+        run_query(args.request, args.result)
+    else:
+        run_parse(args.request, args.result)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,858 @@
+"""In-session JSON/JSONL quality review for golden-set candidates."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import time
+from pathlib import Path
+from typing import Any, Sequence
+
+import pandas as pd
+import streamlit as st
+
+from scripts.align_golden_dataset import best_match
+from scripts.golden_dataset_tools import append_unique_record, load_jsonl
+
+
+_ALIAS_FIELDS = {
+    "query": (
+        "query",
+        "question",
+        "prompt",
+        "input",
+        "user_input",
+        "user_query",
+        "question_text",
+        "instruction",
+        "task",
+    ),
+    "reference_answer": (
+        "reference_answer",
+        "answer",
+        "expected_answer",
+        "expected_output",
+        "ground_truth",
+        "ground_truth_answer",
+        "ideal_answer",
+        "output",
+        "response",
+        "completion",
+        "target",
+    ),
+    "source_text": (
+        "source_text",
+        "context",
+        "contexts",
+        "source",
+        "passage",
+        "passages",
+        "supporting_context",
+        "supporting_text",
+        "evidence",
+        "documents",
+        "retrieved_context",
+        "reference_context",
+    ),
+    "relevant_chunk_ids": (
+        "relevant_chunk_ids",
+        "relevant_ids",
+        "chunk_ids",
+        "chunk_id",
+        "document_chunk_ids",
+    ),
+}
+_REQUIRED_CONTENT = ("query", "reference_answer", "source_text")
+_WORD_RE = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?", re.IGNORECASE)
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "under",
+    "with",
+}
+
+
+def _normalize_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+
+
+def _find_named_value(value: Any, target: str) -> Any:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _normalize_key(key) == target and child not in (None, "", []):
+                return child
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                found = _find_named_value(child, target)
+                if found not in (None, "", []):
+                    return found
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                found = _find_named_value(child, target)
+                if found not in (None, "", []):
+                    return found
+    return None
+
+
+def _first_value(record: dict[str, Any], names: Sequence[str]) -> Any:
+    for name in names:
+        value = _find_named_value(record, _normalize_key(name))
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def _text_value(value: Any) -> str:
+    if value in (None, "", []):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_text_value(item) for item in value]
+        return "\n\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        for preferred in ("content", "text", "page_content", "value"):
+            selected = _find_named_value(value, preferred)
+            if selected not in (None, "", []) and selected is not value:
+                return _text_value(selected)
+        parts = [
+            _text_value(child)
+            for key, child in value.items()
+            if _normalize_key(key) not in {"role", "type", "id"}
+        ]
+        return "\n\n".join(part for part in parts if part)
+    return str(value).strip()
+
+
+def _chat_values(record: dict[str, Any]) -> tuple[str, str]:
+    messages = _first_value(
+        record,
+        ("messages", "conversation", "conversations", "dialogue", "chat"),
+    )
+    if not isinstance(messages, list):
+        return "", ""
+
+    query = ""
+    answer = ""
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = _normalize_key(
+            message.get("role")
+            or message.get("from")
+            or message.get("speaker")
+            or message.get("author")
+            or ""
+        )
+        content = _text_value(
+            message.get("content")
+            or message.get("text")
+            or message.get("value")
+            or message.get("message")
+        )
+        if role in {"user", "human", "question", "prompt"} and content:
+            query = content
+        elif role in {"assistant", "model", "gpt", "answer", "bot"} and content:
+            answer = content
+    return query, answer
+
+
+def _semantic_signal_count(record: dict[str, Any]) -> int:
+    direct_keys = {_normalize_key(key) for key in record}
+    count = sum(
+        any(alias in direct_keys for alias in _ALIAS_FIELDS[field])
+        for field in ("query", "reference_answer", "source_text")
+    )
+    chat_keys = {"messages", "conversation", "conversations", "dialogue", "chat"}
+    if direct_keys & chat_keys:
+        chat_query, chat_answer = _chat_values(record)
+        count = max(count, int(bool(chat_query)) + int(bool(chat_answer)))
+    return count
+
+
+def _record_objects(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        records: list[dict[str, Any]] = []
+        for child in value:
+            records.extend(_record_objects(child))
+        return records
+    if not isinstance(value, dict):
+        return []
+
+    signals = _semantic_signal_count(value)
+    if signals >= 2:
+        return [value]
+
+    nested: list[dict[str, Any]] = []
+    for child in value.values():
+        if isinstance(child, (dict, list)):
+            nested.extend(_record_objects(child))
+    if nested:
+        return nested
+    return [value] if signals else []
+
+
+def _decode_json_values(
+    text: str,
+    file_name: str,
+) -> tuple[list[Any], list[str]]:
+    try:
+        return [json.loads(text)], []
+    except json.JSONDecodeError as original_error:
+        pass
+
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    errors: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        while cursor < len(text) and (
+            text[cursor].isspace() or text[cursor] in ",[]"
+        ):
+            cursor += 1
+        if cursor >= len(text):
+            break
+        try:
+            value, cursor = decoder.raw_decode(text, cursor)
+            values.append(value)
+        except json.JSONDecodeError as exc:
+            line_number = text.count("\n", 0, cursor) + 1
+            line_end = text.find("\n", cursor)
+            line_end = len(text) if line_end < 0 else line_end
+            fragment = text[cursor:line_end].strip()
+            if fragment:
+                errors.append(f"{file_name}, line {line_number}: {exc.msg}")
+            cursor = line_end + 1
+
+    if values:
+        return values, errors
+    return [], [
+        f"{file_name}: {original_error.msg} at line {original_error.lineno}"
+    ]
+
+
+# Accept common JSON and JSONL shapes before normalizing each record.
+
+def parse_uploaded_records(
+    payload: bytes,
+    file_name: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Decode conventional, nested, JSONL, or loose sequences into candidate rows."""
+    text = payload.decode("utf-8-sig", errors="replace")
+    decoded, errors = _decode_json_values(text, file_name)
+    records: list[dict[str, Any]] = []
+    for value in decoded:
+        records.extend(_record_objects(value))
+
+    imported: list[dict[str, Any]] = []
+    digest = hashlib.sha256(payload).hexdigest()[:12]
+    for index, raw in enumerate(records, start=1):
+        imported.append(
+            {
+                "key": f"{digest}-{index}",
+                "source_file": file_name,
+                "source_row": index,
+                "raw": raw,
+                "record": canonicalize_record(raw),
+            }
+        )
+    if decoded and not imported:
+        errors.append(
+            f"{file_name}: no question/answer/context fields could be inferred"
+        )
+    return imported, errors
+
+
+# Map common field names into the canonical golden-record schema.
+
+def canonicalize_record(record: dict[str, Any]) -> dict[str, Any]:
+    canonical = {
+        field: _first_value(record, aliases)
+        for field, aliases in _ALIAS_FIELDS.items()
+    }
+    chat_query, chat_answer = _chat_values(record)
+    canonical["query"] = canonical.get("query") or chat_query
+    canonical["reference_answer"] = (
+        canonical.get("reference_answer") or chat_answer
+    )
+
+    ids = canonical.get("relevant_chunk_ids")
+    if isinstance(ids, str):
+        ids = [value.strip() for value in ids.split(",") if value.strip()]
+    elif isinstance(ids, Sequence) and not isinstance(ids, (str, bytes, dict)):
+        ids = [str(value).strip() for value in ids if str(value).strip()]
+    else:
+        ids = []
+
+    return {
+        "query": _text_value(canonical.get("query")),
+        "reference_answer": _text_value(canonical.get("reference_answer")),
+        "source_text": _text_value(canonical.get("source_text")),
+        "relevant_chunk_ids": ids,
+        "verified": bool(_first_value(record, ("verified",)) or False),
+        "provenance": _text_value(
+            _first_value(record, ("provenance",))
+            or "uploaded-json-review"
+        ),
+    }
+
+
+# Prepare imported records for evaluation without changing the uploaded file.
+
+def normalize_records_for_evaluation(
+    payload: bytes,
+    file_name: str,
+    chunks: Sequence[dict[str, Any]],
+    alignment_threshold: float = 0.60,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Convert arbitrary JSON structures into the canonical evaluation schema."""
+    imported, errors = parse_uploaded_records(payload, file_name)
+    known_ids = {
+        chunk.get("metadata", {}).get("chunk_id")
+        for chunk in chunks
+        if chunk.get("metadata", {}).get("chunk_id")
+    }
+    normalized: list[dict[str, Any]] = []
+
+    for imported_record in imported:
+        record = dict(imported_record["record"])
+        row = imported_record["source_row"]
+        missing = [
+            field
+            for field in _REQUIRED_CONTENT
+            if not record.get(field)
+        ]
+        if missing:
+            errors.append(
+                f"{file_name}, record {row}: missing "
+                + ", ".join(missing)
+            )
+            continue
+
+        provided_ids = [
+            chunk_id
+            for chunk_id in record.get("relevant_chunk_ids", [])
+            if chunk_id in known_ids
+        ]
+        matched_id, alignment = best_match(record["source_text"], list(chunks))
+        if provided_ids:
+            record["relevant_chunk_ids"] = provided_ids
+            alignment_source = "provided stable chunk ID"
+        elif matched_id and alignment >= alignment_threshold:
+            record["relevant_chunk_ids"] = [matched_id]
+            alignment_source = "derived from source-text alignment"
+        else:
+            errors.append(
+                f"{file_name}, record {row}: source could not be aligned "
+                f"to the frozen corpus (best score {alignment:.1%})"
+            )
+            continue
+
+        record["verified"] = bool(record.get("verified", False))
+        record["provenance"] = (
+            record.get("provenance")
+            or "normalized-external-evaluation-dataset"
+        )
+        record["_normalization"] = {
+            "source_file": file_name,
+            "source_row": row,
+            "alignment_score": round(alignment, 3),
+            "alignment_source": alignment_source,
+            "normalized_for_evaluation": True,
+        }
+        normalized.append(record)
+
+    return normalized, errors
+
+
+def _normalized_question(value: str) -> str:
+    return " ".join(value.lower().split())
+
+
+def answer_source_overlap(answer: str, source: str) -> float:
+    answer_tokens = {
+        token
+        for token in _WORD_RE.findall(answer.lower())
+        if token not in _STOPWORDS
+    }
+    source_tokens = set(_WORD_RE.findall(source.lower()))
+    if not answer_tokens:
+        return 0.0
+    return len(answer_tokens & source_tokens) / len(answer_tokens)
+
+
+# Check alignment, duplication, and answer support before human review.
+
+def evaluate_imported_record(
+    record: dict[str, Any],
+    existing_records: Sequence[dict[str, Any]],
+    chunks: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    missing = [field for field in _REQUIRED_CONTENT if not record.get(field)]
+    query = record.get("query", "")
+    answer = record.get("reference_answer", "")
+    source = record.get("source_text", "")
+    provided_ids = list(record.get("relevant_chunk_ids") or [])
+    known_ids = {
+        chunk.get("metadata", {}).get("chunk_id")
+        for chunk in chunks
+        if chunk.get("metadata", {}).get("chunk_id")
+    }
+    existing_questions = {
+        _normalized_question(item.get("query", ""))
+        for item in existing_records
+    }
+    duplicate = bool(query) and _normalized_question(query) in existing_questions
+
+    matched_id: str | None = None
+    alignment = 0.0
+    if source and chunks:
+        matched_id, alignment = best_match(source, list(chunks))
+
+    answer_overlap = answer_source_overlap(answer, source)
+    valid_provided_ids = [chunk_id for chunk_id in provided_ids if chunk_id in known_ids]
+    invalid_ids = [chunk_id for chunk_id in provided_ids if chunk_id not in known_ids]
+    id_consistent = bool(matched_id and matched_id in valid_provided_ids)
+    question_words = len(query.split())
+    question_shape_ok = 6 <= question_words <= 45
+
+    score = 0
+    score += 20 if not missing else max(0, 20 - len(missing) * 7)
+    score += round(35 * min(alignment, 1.0))
+    score += round(15 * min(answer_overlap, 1.0))
+    score += 15 if id_consistent else (8 if matched_id else 0)
+    score += 10 if question_shape_ok else 3
+    score += 5 if not duplicate else 0
+    score = min(score, 100)
+
+    blockers: list[str] = []
+    cautions: list[str] = []
+    positives: list[str] = []
+    if missing:
+        blockers.append("Missing required content: " + ", ".join(missing))
+    if duplicate:
+        blockers.append("Question already exists in the golden set")
+    if not question_shape_ok:
+        cautions.append("Question should contain 6–45 words")
+    if alignment >= 0.80:
+        positives.append(f"Source aligns strongly to {matched_id}")
+    elif alignment >= 0.60:
+        cautions.append("Source alignment is plausible but needs review")
+    else:
+        blockers.append("Source passage does not align confidently to the frozen corpus")
+    if answer_overlap >= 0.60:
+        positives.append("Reference answer is well supported by the source text")
+    elif answer_overlap >= 0.35:
+        cautions.append("Reference answer has partial lexical support")
+    else:
+        blockers.append("Reference answer is weakly supported by the supplied source")
+    if invalid_ids:
+        cautions.append("Unknown chunk IDs: " + ", ".join(invalid_ids))
+    if matched_id and not id_consistent:
+        cautions.append(f"Suggested stable chunk ID: {matched_id}")
+    elif id_consistent:
+        positives.append("Provided chunk ID matches the aligned source")
+
+    if blockers:
+        recommendation = "Do not add"
+    elif cautions or score < 85:
+        recommendation = "Human review"
+    else:
+        recommendation = "Ready to add"
+
+    return {
+        "score": score,
+        "recommendation": recommendation,
+        "missing_fields": missing,
+        "duplicate": duplicate,
+        "alignment_score": round(alignment, 3),
+        "answer_source_overlap": round(answer_overlap, 3),
+        "matched_chunk_id": matched_id,
+        "valid_provided_ids": valid_provided_ids,
+        "invalid_ids": invalid_ids,
+        "id_consistent": id_consistent,
+        "question_words": question_words,
+        "blockers": blockers,
+        "cautions": cautions,
+        "positives": positives,
+    }
+
+
+# Build the final record only after the reviewer approves the candidate.
+
+def prepare_verified_record(
+    record: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> dict[str, Any]:
+    chunk_ids = list(evaluation.get("valid_provided_ids") or [])
+    matched_id = evaluation.get("matched_chunk_id")
+    if matched_id and matched_id not in chunk_ids:
+        chunk_ids = [matched_id]
+    return {
+        "query": record["query"].strip(),
+        "relevant_chunk_ids": chunk_ids,
+        "reference_answer": record["reference_answer"].strip(),
+        "source_text": record["source_text"].strip(),
+        "verified": True,
+        "provenance": "human-reviewed-json-upload",
+        "_import_review": {
+            "score": evaluation["score"],
+            "alignment_score": evaluation["alignment_score"],
+            "answer_source_overlap": evaluation["answer_source_overlap"],
+            "reviewed_at": time.time(),
+        },
+    }
+
+
+@st.cache_data(show_spinner=False)
+def load_review_context(
+    root_text: str,
+    golden_path_text: str,
+    manifest_path_text: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    root = Path(root_text)
+    golden = load_jsonl(golden_path_text)
+    manifest = json.loads(Path(manifest_path_text).read_text(encoding="utf-8"))
+    chunks = load_jsonl(root / manifest["chunks"]["path"])
+    return golden, chunks
+
+
+def _decision_key(imported: dict[str, Any]) -> str:
+    return f"json_review_decision_{imported['key']}"
+
+
+def _decision_color(recommendation: str) -> str:
+    return {
+        "Ready to add": "#22C55E",
+        "Human review": "#F59E0B",
+        "Do not add": "#EF4444",
+    }[recommendation]
+
+
+def _render_review_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .json-review-hero {
+            background: linear-gradient(
+                135deg,
+                var(--panel) 0%,
+                color-mix(in srgb, var(--accent) 8%, var(--panel)) 100%
+            );
+            border: 1px solid var(--line);
+            border-radius: 1rem;
+            padding: 1.15rem 1.25rem;
+            margin: .65rem 0 1rem;
+            box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 5%, transparent);
+        }
+        .json-review-hero small {
+            color: var(--accent);
+            font-weight: 750;
+            letter-spacing: .11em;
+            text-transform: uppercase;
+        }
+        .json-review-hero h3 { margin: .3rem 0; }
+        .json-review-hero p { color: var(--muted); margin: 0; max-width: 760px; }
+        .review-decision {
+            border: 1px solid var(--line);
+            border-left: .3rem solid;
+            border-radius: .8rem;
+            padding: .8rem .9rem;
+            background: var(--panel);
+            margin: .5rem 0 .8rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# Streamlit handles the review controls while the checks above stay reusable.
+
+def render_json_review_workspace(
+    root: Path,
+    golden_path: Path,
+    manifest_path: Path,
+    candidates_path: Path,
+) -> None:
+    _render_review_styles()
+    st.markdown(
+        """
+        <div class="json-review-hero">
+          <small>Golden-set intake</small>
+          <h3>Review uploaded JSON candidates</h3>
+          <p>Audit structure, source alignment, stable IDs, duplicate questions,
+          and answer support against the frozen corpus. Nothing is added automatically.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    uploads = st.file_uploader(
+        "Upload JSON or JSONL",
+        type=["json", "jsonl"],
+        accept_multiple_files=True,
+        key="golden_json_uploads",
+        help=(
+            "Automatically detects common and nested dataset schemas, chat records, "
+            "JSON arrays, JSONL, and loose comma-separated JSON objects."
+        ),
+    )
+    if not uploads:
+        st.info(
+            "Upload candidate questions to receive an add, review, or do-not-add "
+            "recommendation before making any golden-set change."
+        )
+        return
+
+    imported_records: list[dict[str, Any]] = []
+    parse_errors: list[str] = []
+    for upload in uploads:
+        imported, errors = parse_uploaded_records(upload.getvalue(), upload.name)
+        imported_records.extend(imported)
+        parse_errors.extend(errors)
+    for error in parse_errors:
+        st.error(error)
+    if not imported_records:
+        st.warning("No valid JSON records were found.")
+        return
+
+    existing, chunks = load_review_context(
+        str(root), str(golden_path), str(manifest_path)
+    )
+    initial_evaluations = [
+        evaluate_imported_record(item["record"], existing, chunks)
+        for item in imported_records
+    ]
+    counts = {
+        label: sum(
+            evaluation["recommendation"] == label
+            for evaluation in initial_evaluations
+        )
+        for label in ("Ready to add", "Human review", "Do not add")
+    }
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Uploaded", len(imported_records))
+    metric_cols[1].metric("Ready", counts["Ready to add"])
+    metric_cols[2].metric("Needs review", counts["Human review"])
+    metric_cols[3].metric("Do not add", counts["Do not add"])
+
+    summary_rows = []
+    for imported, evaluation in zip(imported_records, initial_evaluations):
+        summary_rows.append(
+            {
+                "File": imported["source_file"],
+                "Row": imported["source_row"],
+                "Question": imported["record"]["query"] or "Missing question",
+                "Score": evaluation["score"],
+                "Recommendation": evaluation["recommendation"],
+                "Aligned chunk": evaluation["matched_chunk_id"] or "—",
+            }
+        )
+    st.dataframe(
+        pd.DataFrame(summary_rows),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Question": st.column_config.TextColumn(width="large"),
+            "Score": st.column_config.ProgressColumn(
+                min_value=0, max_value=100, format="%d"
+            ),
+        },
+    )
+
+    selected_index = st.selectbox(
+        "Candidate to review",
+        range(len(imported_records)),
+        format_func=lambda index: (
+            f"{initial_evaluations[index]['recommendation']} · "
+            f"{imported_records[index]['record']['query'] or 'Missing question'}"
+        ),
+        key="json_review_selected",
+    )
+    imported = imported_records[selected_index]
+    original = imported["record"]
+    item_key = imported["key"]
+
+    with st.expander("Detected structure and normalized RAG record"):
+        structure_left, structure_right = st.columns(2)
+        with structure_left:
+            st.caption("Original uploaded record")
+            st.json(imported["raw"], expanded=True)
+        with structure_right:
+            st.caption("Normalized for evaluation")
+            st.json(original, expanded=True)
+
+    st.markdown("#### Review and correct")
+    query = st.text_input(
+        "Question",
+        original["query"],
+        key=f"json_query_{item_key}",
+    )
+    answer = st.text_area(
+        "Reference answer",
+        original["reference_answer"],
+        height=100,
+        key=f"json_answer_{item_key}",
+    )
+    source = st.text_area(
+        "Supporting source passage",
+        original["source_text"],
+        height=150,
+        key=f"json_source_{item_key}",
+    )
+    ids_text = st.text_input(
+        "Relevant chunk IDs",
+        ", ".join(original["relevant_chunk_ids"]),
+        placeholder="control05-safeguard5.3",
+        key=f"json_ids_{item_key}",
+    )
+    edited = {
+        "query": query.strip(),
+        "reference_answer": answer.strip(),
+        "source_text": source.strip(),
+        "relevant_chunk_ids": [
+            value.strip() for value in ids_text.split(",") if value.strip()
+        ],
+        "verified": False,
+        "provenance": "uploaded-json-review",
+    }
+    evaluation = evaluate_imported_record(edited, existing, chunks)
+    color = _decision_color(evaluation["recommendation"])
+    st.markdown(
+        f"""
+        <div class="review-decision" style="border-left-color:{color}">
+          <b>{evaluation['recommendation']}</b> · quality score {evaluation['score']}/100<br>
+          <span style="opacity:.68">Alignment {evaluation['alignment_score']:.0%}
+          · answer support {evaluation['answer_source_overlap']:.0%}
+          · {evaluation['question_words']} question words</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.progress(evaluation["score"] / 100, text="Golden-candidate quality gate")
+
+    detail_cols = st.columns(3)
+    with detail_cols[0]:
+        st.markdown("**Passed**")
+        if evaluation["positives"]:
+            for reason in evaluation["positives"]:
+                st.success(reason)
+        else:
+            st.caption("No strong checks yet.")
+    with detail_cols[1]:
+        st.markdown("**Review**")
+        if evaluation["cautions"]:
+            for reason in evaluation["cautions"]:
+                st.warning(reason)
+        else:
+            st.caption("No cautions.")
+    with detail_cols[2]:
+        st.markdown("**Blocking**")
+        if evaluation["blockers"]:
+            for reason in evaluation["blockers"]:
+                st.error(reason)
+        else:
+            st.caption("No blockers.")
+
+    previous_decision = st.session_state.get(_decision_key(imported))
+    if previous_decision == "added":
+        st.success("This record was added to golden_dataset.jsonl.")
+    elif previous_decision == "queued":
+        st.info("This record was placed in the human-review candidate queue.")
+    elif previous_decision == "rejected":
+        st.warning("This record is marked do not add for this session.")
+
+    confirm = st.checkbox(
+        "I verified the question, answer, source passage, and stable chunk ID",
+        key=f"json_confirm_{item_key}",
+    )
+    action_cols = st.columns(3)
+    can_add = (
+        confirm
+        and evaluation["recommendation"] != "Do not add"
+        and bool(evaluation["matched_chunk_id"])
+    )
+    if action_cols[0].button(
+        "Add to golden set",
+        type="primary",
+        width="stretch",
+        disabled=not can_add,
+        key=f"json_add_{item_key}",
+    ):
+        verified = prepare_verified_record(edited, evaluation)
+        if append_unique_record(golden_path, verified):
+            st.session_state[_decision_key(imported)] = "added"
+            st.success("Added as a human-verified golden record.")
+        else:
+            st.warning("That question already exists in the golden set.")
+
+    if action_cols[1].button(
+        "Queue for review",
+        width="stretch",
+        disabled=not edited["query"] or evaluation["duplicate"],
+        key=f"json_queue_{item_key}",
+    ):
+        candidate = prepare_verified_record(edited, evaluation)
+        candidate["verified"] = False
+        candidate["provenance"] = "uploaded-json-candidate"
+        candidate["_candidate"] = {
+            "quality_score": evaluation["score"],
+            "requires_human_review": True,
+            "created_at": time.time(),
+        }
+        candidate.pop("_import_review", None)
+        if append_unique_record(candidates_path, candidate):
+            st.session_state[_decision_key(imported)] = "queued"
+            st.info("Queued without changing the golden set.")
+        else:
+            st.warning("That question is already in the candidate queue.")
+
+    if action_cols[2].button(
+        "Do not add",
+        width="stretch",
+        key=f"json_reject_{item_key}",
+    ):
+        st.session_state[_decision_key(imported)] = "rejected"
+        st.warning("Rejected for this session; no file was changed.")
+
+    report = [
+        {
+            "source_file": imported_item["source_file"],
+            "source_row": imported_item["source_row"],
+            "record": imported_item["record"],
+            "evaluation": evaluation_item,
+        }
+        for imported_item, evaluation_item in zip(
+            imported_records, initial_evaluations
+        )
+    ]
+    st.download_button(
+        "Download review report · JSON",
+        data=json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name="golden-candidate-review.json",
+        mime="application/json",
+        width="stretch",
+        key="download_json_review_report",
+    )

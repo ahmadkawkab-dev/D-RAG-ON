@@ -1,0 +1,187 @@
+{
+  "result": {
+    "query": "what does safeguard 5.3 entail?",
+    "ranked": [
+      {
+        "text": "Control 01 / Safeguard 1.1 — Control 02 / Safeguard 2.3\nCONTROL\nSAFEGUARD\nTITLE/\nNUMBER\nDESCRIPTION\nInventory and Control of Enterprise Assets\nActively manage (inventory, track, and correct) all enterprise assets (end-user devices, including portable and mobile; network devices; non-\ncomputing/Internet of Things (IoT) devices; and servers) connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments, to accurately know the totality of assets that need to be monitored and protected within the enterprise. This will also support\nidentifying unauthorized and unmanaged assets to remove or remediate.",
+        "metadata": {
+          "text": "Control 01 / Safeguard 1.1 — Control 02 / Safeguard 2.3\nCONTROL\nSAFEGUARD\nTITLE/\nNUMBER\nDESCRIPTION\nInventory and Control of Enterprise Assets\nActively manage (inventory, track, and correct) all enterprise assets (end-user devices, including portable and mobile; network devices; non-\ncomputing/Internet of Things (IoT) devices; and servers) connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments, to accurately know the totality of assets that need to be monitored and protected within the enterprise. This will also support\nidentifying unauthorized and unmanaged assets to remove or remediate.",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0219",
+            "chunk_index": 219,
+            "page_start": 69,
+            "page_end": 81,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "Appendix",
+              "Controls and Safeguards Index"
+            ],
+            "clause_number": null,
+            "token_count": 145,
+            "element_type": "narrative",
+            "table_annotation": null
+          }
+        },
+        "score": 0.7501136064529419,
+        "rerank_score": 0.84375
+      },
+      {
+        "text": "Control 01 / Safeguard 1.1 — Control 02 / Safeguard 2.3\nCONTROL\nSAFEGUARD\nTITLE/\nASSET TYPE\nSECURITY FUNCTION\nIG1\nIG2\nIG3\nNUMBER\nDESCRIPTION\n01\nInventory and Control of Enterprise Assets\nActively manage (inventory, track, and correct) all enterprise assets (end-user devices, including portable and mobile; network devices; non-\ncomputing/Internet of Things (IoT) devices; and servers) connected to the infrastructure physically, virtually, remotely, and those within cloud\nenvironments, to accurately know the totality of assets that need to be monitored and protected within the enterprise. This will also support\nidentifying unauthorized and unmanaged assets to remove or remediate.\n•••",
+        "metadata": {
+          "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+          "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+          "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0318",
+          "chunk_index": 230,
+          "page_start": 69,
+          "page_end": 81,
+          "breadcrumb": [
+            "CIS Critical Security Controls®",
+            "Appendix",
+            "Controls and Safeguards Index"
+          ],
+          "clause_number": null,
+          "token_count": 167,
+          "element_type": "narrative",
+          "table_annotation": null
+        },
+        "score": 0.5347610712051392,
+        "rerank_score": 0.7421875
+      },
+      {
+        "text": "[Applies to Implementation Groups: IG2, IG3; Asset Type: Data]\n3.9 Encrypt Data on Removable Media\nData\nEncrypt data on removable media.\n﻿Controls and Safeguards Index\nA5\nControl 03 / Safeguard 3.10 — Control 04 / Safeguard 4.7\nCONTROL\nSAFEGUARD\nTITLE/\nNUMBER\nDESCRIPTION",
+        "metadata": {
+          "text": "[Applies to Implementation Groups: IG2, IG3; Asset Type: Data]\n3.9 Encrypt Data on Removable Media\nData\nEncrypt data on removable media.\n﻿Controls and Safeguards Index\nA5\nControl 03 / Safeguard 3.10 — Control 04 / Safeguard 4.7\nCONTROL\nSAFEGUARD\nTITLE/\nNUMBER\nDESCRIPTION",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0240",
+            "chunk_index": 240,
+            "page_start": 69,
+            "page_end": 81,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "Appendix",
+              "Controls and Safeguards Index"
+            ],
+            "clause_number": "3.9",
+            "token_count": 86,
+            "element_type": "clause",
+            "table_annotation": {
+              "clause_number": "3.9",
+              "asset_type": "Data",
+              "security_function": "",
+              "applicable_groups": [
+                "IG2",
+                "IG3"
+              ]
+            }
+          }
+        },
+        "score": 0.6375473737716675,
+        "rerank_score": 0.28125
+      },
+      {
+        "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n6.3 Require MFA for Externally-Exposed Applications\nUsers\nRequire all externally-exposed enterprise or third-party applications to enforce MFA, where supported. Enforcing MFA through a\ndirectory service or SSO provider is a satisfactory implementation of this Safeguard.",
+        "metadata": {
+          "text": "[Applies to Implementation Groups: IG1, IG2, IG3; Asset Type: Users]\n6.3 Require MFA for Externally-Exposed Applications\nUsers\nRequire all externally-exposed enterprise or third-party applications to enforce MFA, where supported. Enforcing MFA through a\ndirectory service or SSO provider is a satisfactory implementation of this Safeguard.",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0266",
+            "chunk_index": 266,
+            "page_start": 69,
+            "page_end": 81,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "Appendix",
+              "Controls and Safeguards Index"
+            ],
+            "clause_number": "6.3",
+            "token_count": 77,
+            "element_type": "clause",
+            "table_annotation": {
+              "clause_number": "6.3",
+              "asset_type": "Users",
+              "security_function": "",
+              "applicable_groups": [
+                "IG1",
+                "IG2",
+                "IG3"
+              ]
+            }
+          }
+        },
+        "score": 0.5000253915786743,
+        "rerank_score": 0.201171875
+      },
+      {
+        "text": "[Applies to Implementation Groups: IG2, IG3; Asset Type: Data]\n3.11 Encrypt Sensitive Data at Rest\nData\nEncrypt sensitive data at rest on servers, applications, and databases containing sensitive data. Storage-layer\nencryption, also known as server-side encryption, meets the minimum requirement of this Safeguard. Additional\nencryption methods may include application-layer encryption, also known as client-side encryption, where access to\nthe data storage device(s) does not permit access to the plain-text data.",
+        "metadata": {
+          "text": "[Applies to Implementation Groups: IG2, IG3; Asset Type: Data]\n3.11 Encrypt Sensitive Data at Rest\nData\nEncrypt sensitive data at rest on servers, applications, and databases containing sensitive data. Storage-layer\nencryption, also known as server-side encryption, meets the minimum requirement of this Safeguard. Additional\nencryption methods may include application-layer encryption, also known as client-side encryption, where access to\nthe data storage device(s) does not permit access to the plain-text data.",
+          "metadata": {
+            "source_file": "CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf",
+            "doc_title": "CIS_Controls__v8__Critical_Security_Controls__2023_08",
+            "chunk_id": "CIS_Controls__v8__Critical_Security_Controls__2023_08-0050",
+            "chunk_index": 50,
+            "page_start": 23,
+            "page_end": 25,
+            "breadcrumb": [
+              "CIS Critical Security Controls®",
+              "CIS Critical Security Controls",
+              "Data Protection"
+            ],
+            "clause_number": "3.11",
+            "token_count": 104,
+            "element_type": "clause",
+            "table_annotation": {
+              "clause_number": "3.11",
+              "asset_type": "Data",
+              "security_function": "",
+              "applicable_groups": [
+                "IG2",
+                "IG3"
+              ]
+            }
+          }
+        },
+        "score": 0.6020024418830872,
+        "rerank_score": 0.1123046875
+      }
+    ],
+    "answer": "According to the provided context, there is no safeguard (Safeguard 5.3) listed in either of the given controls or safeguards sections. The context only covers Safeguards 1 through 4 and includes a table that provides details on how certain types of assets are secured. There does not appear to be any information about an additional safeguard numbered as 5.3, so the answer to your question is: Answer: Question irrelevant to the available document context.",
+    "is_relevant": true,
+    "top_relevance_score": 0.84375,
+    "rerank_route": {
+      "route": "light",
+      "reason": "lightweight reranker has a confident, clearly separated top result",
+      "top_score": 0.84375,
+      "margin": 0.1015625,
+      "exact_clause_match": false,
+      "complex_query": false,
+      "selected_model": "Qwen/Qwen3-Reranker-0.6B",
+      "escalated": false,
+      "retrieved_candidate_count": 20,
+      "unique_candidate_count": 18,
+      "light_candidate_count": 8
+    },
+    "relevance_threshold": 0.2
+  },
+  "configuration": {
+    "collection": "DocumentChunks",
+    "embed_model": "embeddinggemma",
+    "host": "http://localhost:11434",
+    "heavy_rerank_model": "Qwen/Qwen3-Reranker-4B",
+    "adaptive_rerank": true,
+    "rerank_model": "Qwen/Qwen3-Reranker-0.6B",
+    "rerank_device": null,
+    "answer_model": "qwen2.5:1.5b",
+    "retrieve_k": 20,
+    "alpha": 0.55,
+    "top_n": 5,
+    "answer": true,
+    "relevance_threshold": 0.2
+  },
+  "elapsed_seconds": 19.77475722300005
+}
