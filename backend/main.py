@@ -14,10 +14,16 @@ from backend.db.mongodb import MongoManager
 from backend.db.weaviate import WeaviateManager
 from backend.services.fast_llm_service import FastLLMService
 from backend.services.fast_rag_service import FastRAGService
+from backend.services.general_chat_service import GeneralChatService
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime_settings = settings or get_settings()
+    development_origin_regex = (
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+        if runtime_settings.environment in {"development", "test"}
+        else None
+    )
     mongodb = MongoManager()
     weaviate = WeaviateManager()
 
@@ -25,16 +31,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = runtime_settings
         application.state.mongodb = mongodb
+        application.state.active_generation_tasks = set()
         application.state.weaviate = weaviate
         application.state.rag_service = FastRAGService(
             runtime_settings,
             weaviate,
         )
         application.state.llm_service = FastLLMService(runtime_settings)
+        application.state.general_chat_service = GeneralChatService(
+            runtime_settings
+        )
         try:
             if runtime_settings.connect_external_services_on_startup:
                 await mongodb.connect(runtime_settings)
                 await weaviate.connect(runtime_settings)
+                if runtime_settings.keep_models_warm:
+                    await application.state.llm_service.warm()
             yield
         finally:
             await weaviate.close()
@@ -49,8 +61,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_origins,
+        allow_origin_regex=development_origin_regex,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
     application.include_router(

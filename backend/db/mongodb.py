@@ -43,15 +43,42 @@ class MongoManager:
             unique=True,
             name="users_email_unique",
         )
+        await database.password_reset_codes.create_index(
+            [("email", ASCENDING)],
+            unique=True,
+            name="password_reset_email_unique",
+        )
+        await database.password_reset_codes.create_index(
+            [("expires_at", ASCENDING)],
+            expireAfterSeconds=0,
+            name="password_reset_expiry",
+        )
         await database.chat_sessions.create_index(
-            [("user_id", ASCENDING), ("updated_at", DESCENDING)],
-            name="sessions_user_updated",
+            [("user_id", ASCENDING), ("mode", ASCENDING), ("updated_at", DESCENDING)],
+            name="sessions_user_mode_updated",
         )
         await database.chat_messages.create_index(
             [("session_id", ASCENDING), ("timestamp", ASCENDING)],
             name="messages_session_timestamp",
         )
+        await database.chat_messages.create_index(
+            [
+                ("session_id", ASCENDING),
+                ("reply_to_message_id", ASCENDING),
+                ("version", DESCENDING),
+            ],
+            name="messages_response_versions",
+        )
+        await database.feedback.create_index(
+            [("user_id", ASCENDING), ("message_id", ASCENDING)],
+            unique=True,
+            name="feedback_user_message_unique",
+        )
+        await database.feedback.create_index(
+            [("session_id", ASCENDING), ("updated_at", DESCENDING)],
 
+            name="feedback_session_updated",
+        )
     async def close(self) -> None:
         if self._client is not None:
             self._client.close()

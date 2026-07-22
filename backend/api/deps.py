@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -11,6 +11,9 @@ from backend.core.config import Settings
 from backend.core.security import InvalidTokenError, decode_token
 from backend.models.user import UserDocument
 from backend.services.chat_service import ChatService
+from backend.services.email_service import EmailService
+from backend.services.feedback_service import FeedbackService
+from backend.services.general_chat_service import GeneralChatService
 from backend.services.llm_service import LLMService
 from backend.services.rag_service import RAGService
 
@@ -32,6 +35,20 @@ def get_rag_service(request: Request) -> RAGService:
 
 def get_llm_service(request: Request) -> LLMService:
     return request.app.state.llm_service
+
+
+def get_general_chat_service(request: Request) -> GeneralChatService:
+    return request.app.state.general_chat_service
+
+
+def get_email_service(
+    settings: Settings = Depends(get_app_settings),
+) -> EmailService:
+    return EmailService(settings)
+
+
+def get_feedback_service(database: Any = Depends(get_db)) -> FeedbackService:
+    return FeedbackService(database)
 
 
 def get_chat_service(database: Any = Depends(get_db)) -> ChatService:

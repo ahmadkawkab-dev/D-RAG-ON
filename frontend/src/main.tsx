@@ -1,10 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './ConnectedApp.tsx'
+import ConnectedApp from './ConnectedApp'
+import { AppProviders } from '@/components/AppProviders'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AppProviders>
+      <ConnectedApp />
+    </AppProviders>
   </StrictMode>,
 )

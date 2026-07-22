@@ -75,6 +75,9 @@ class FakeCollection:
             ]
         )
 
+    async def count_documents(self, query: dict) -> int:
+        return sum(1 for document in self.documents if _matches(document, query))
+
     async def delete_many(self, query: dict) -> SimpleNamespace:
         before = len(self.documents)
         self.documents = [
@@ -95,5 +98,7 @@ class FakeCollection:
 class FakeDatabase:
     def __init__(self) -> None:
         self.users = FakeCollection()
+        self.password_reset_codes = FakeCollection()
         self.chat_sessions = FakeCollection()
         self.chat_messages = FakeCollection()
+        self.feedback = FakeCollection()

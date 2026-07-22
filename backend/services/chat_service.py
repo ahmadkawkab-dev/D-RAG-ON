@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from backend.models.chat import (
     ChatMessageDocument,
@@ -33,12 +33,19 @@ class ChatService:
         user_id: str,
         session_id: str | None,
         first_message: str,
+        mode: Literal["document", "general"] = "document",
     ) -> ChatSessionDocument:
         now = datetime.now(timezone.utc)
         if session_id:
-            document = await self.database.chat_sessions.find_one(
-                {"_id": session_id, "user_id": user_id}
-            )
+            query: dict[str, Any] = {"_id": session_id, "user_id": user_id}
+            if mode == "general":
+                query["mode"] = "general"
+            else:
+                query["$or"] = [
+                    {"mode": "document"},
+                    {"mode": {"$exists": False}},
+                ]
+            document = await self.database.chat_sessions.find_one(query)
             if document is None:
                 raise SessionNotFoundError(session_id)
             await self.database.chat_sessions.update_one(
@@ -51,6 +58,7 @@ class ChatService:
         session = ChatSessionDocument.create(
             user_id=user_id,
             title=self.title_from_message(first_message),
+            mode=mode,
         )
         await self.database.chat_sessions.insert_one(session.to_mongo())
         return session
@@ -62,6 +70,8 @@ class ChatService:
         role: str,
         content: str,
         sources: list[dict] | None = None,
+        reply_to_message_id: str | None = None,
+        version: int = 1,
     ) -> ChatMessageDocument:
         citations = [
             CitationRecord.model_validate(source) for source in (sources or [])
@@ -71,6 +81,8 @@ class ChatService:
             role=role,
             content=content,
             sources=citations,
+            reply_to_message_id=reply_to_message_id,
+            version=version,
         )
         await self.database.chat_messages.insert_one(message.to_mongo())
         await self.database.chat_sessions.update_one(
@@ -79,10 +91,20 @@ class ChatService:
         )
         return message
 
-    async def list_sessions(self, user_id: str) -> list[ChatSessionDocument]:
-        cursor = self.database.chat_sessions.find({"user_id": user_id}).sort(
-            "updated_at", -1
-        )
+    async def list_sessions(
+        self,
+        user_id: str,
+        mode: Literal["document", "general"] | None = None,
+    ) -> list[ChatSessionDocument]:
+        query: dict[str, Any] = {"user_id": user_id}
+        if mode == "general":
+            query["mode"] = "general"
+        elif mode == "document":
+            query["$or"] = [
+                {"mode": "document"},
+                {"mode": {"$exists": False}},
+            ]
+        cursor = self.database.chat_sessions.find(query).sort("updated_at", -1)
         return [
             ChatSessionDocument.model_validate(document)
             async for document in cursor
@@ -108,6 +130,43 @@ class ChatService:
         ]
         return ChatSessionDocument.model_validate(document), messages
 
+    async def get_message(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message_id: str,
+    ) -> ChatMessageDocument:
+        session = await self.database.chat_sessions.find_one(
+            {"_id": session_id, "user_id": user_id},
+            {"_id": 1},
+        )
+        if session is None:
+            raise SessionNotFoundError(session_id)
+        document = await self.database.chat_messages.find_one(
+            {"_id": message_id, "session_id": session_id}
+        )
+        if document is None:
+            raise SessionNotFoundError(message_id)
+        return ChatMessageDocument.model_validate(document)
+
+    async def next_version(
+        self,
+        *,
+        session_id: str,
+        reply_to_message_id: str,
+    ) -> int:
+        document = await self.database.chat_messages.find_one(
+            {
+                "session_id": session_id,
+                "role": "assistant",
+                "reply_to_message_id": reply_to_message_id,
+            },
+            sort=[("version", -1)],
+            projection={"version": 1},
+        )
+        return int(document.get("version", 1)) + 1 if document else 1
+
     async def delete_session(self, *, user_id: str, session_id: str) -> None:
         document = await self.database.chat_sessions.find_one(
             {"_id": session_id, "user_id": user_id},
@@ -116,6 +175,7 @@ class ChatService:
         if document is None:
             raise SessionNotFoundError(session_id)
         await self.database.chat_messages.delete_many({"session_id": session_id})
+        await self.database.feedback.delete_many({"session_id": session_id})
         result = await self.database.chat_sessions.delete_one(
             {"_id": session_id, "user_id": user_id}
         )

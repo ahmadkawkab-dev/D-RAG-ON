@@ -36,7 +36,7 @@ permissions, encoding, and process-lifecycle failures.
 
 - Python 3.12+ is managed with `uv`; do not use ad hoc `pip` installs.
 - FastAPI is the HTTP adapter; Pydantic validates all boundaries.
-- MongoDB stores users, sessions, messages, and citations.
+- MongoDB stores users, sessions, messages, versions, citations, and feedback.
 - Ollama provides local embeddings, answer generation, and evaluation judging.
 - Weaviate provides vector and hybrid retrieval.
 - Hugging Face Transformers provides local reranking.
@@ -62,12 +62,12 @@ approval. Never commit secrets or machine-specific credentials.
 - `resident_query.py` serializes interactive queries and keeps lightweight
   resources warm. Preserve its locking and model-lifecycle intent.
 - `response_cache.py` owns exact and guarded semantic response reuse.
-- `backend/api/v1/endpoints/` contains thin auth, chat, and history routers.
+- `backend/api/v1/endpoints/` contains thin auth, dual-chat, feedback, and history routers.
 - `backend/core/` owns settings and cryptography; `backend/db/` owns client
   lifecycle; `backend/models/` and `backend/schemas/` separate persistence
   documents from public contracts.
-- `backend/services/` owns Mongo chat persistence, RAG orchestration, async LLM
-  streaming, citation normalization, and SSE encoding.
+- `backend/services/` owns Mongo persistence, isolated general/RAG chat,
+  optional web tools, citation normalization, and SSE encoding.
 - `background_tasks.py`, `job_runner.py`, and `dashboard.py` retain Streamlit
   background work, run state, reporting, and presentation.
 - `eval.py` owns deterministic retrieval metrics and local DeepEval judging.
@@ -84,9 +84,9 @@ Track the backend direction in `docs/BACKEND_GOALS.md`.
 2. Preserve stable chunk IDs, source metadata, page ranges, clause numbers,
    breadcrumbs, table annotations, and provenance through parsing, indexing,
    retrieval, caching, and evaluation.
-3. Keep generated answers grounded in retrieved context, retain numbered
-   citations, and use the established exact abstention response when context is
-   insufficient.
+3. Keep Document Chat grounded with numbered citations and exact abstention.
+   Keep General Chat isolated from Weaviate; web results may be citations but
+   must never be represented as indexed user documents.
 4. Treat parser configuration and aligned benchmark inputs as reproducibility
    contracts. A parser or chunk-ID change requires corresponding alignment and
    regression verification.
@@ -97,8 +97,8 @@ Track the backend direction in `docs/BACKEND_GOALS.md`.
    client-supplied user ID.
 7. Keep JWT secrets server-side, distinguish access and refresh token types, and
    never log credentials, tokens, hashes, or private message content.
-8. Emit SSE events in `metadata`, `delta`, then `done` order and persist the
-   complete assistant message with the exact structured citations emitted.
+8. Emit SSE in `started`, `metadata`, `delta`, then `done` order; persist
+   exact citations, reply links, versions, and feedback outside Weaviate.
 9. Keep safe client errors separate from internal tracebacks.
 10. Do not expose arbitrary service hosts, model IDs, paths, commands, wildcard
     credentialed CORS, or Mongo/Weaviate clients to browsers.

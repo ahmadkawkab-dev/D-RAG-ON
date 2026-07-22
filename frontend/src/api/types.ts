@@ -1,3 +1,5 @@
+export type ChatMode = 'document' | 'general'
+
 export type Citation = {
   document_id: string
   title: string
@@ -5,6 +7,10 @@ export type Citation = {
   file_path: string | null
   page_number: number | null
   section: string | null
+  chunk_id: string | null
+  breadcrumb: string[]
+  summary: string | null
+  metadata: Record<string, unknown>
   chunk_text: string
   score: number | null
   relevance: number | null
@@ -13,6 +19,19 @@ export type Citation = {
 export type ChatSession = {
   id: string
   title: string
+  mode: ChatMode
+  created_at: string
+  updated_at: string
+}
+
+export type Feedback = {
+  id: string
+  message_id: string
+  session_id: string
+  mode: ChatMode
+  direction: 'up' | 'down'
+  chips: string[]
+  comment: string
   created_at: string
   updated_at: string
 }
@@ -24,6 +43,10 @@ export type ChatMessage = {
   content: string
   sources: Citation[]
   timestamp: string
+  reply_to_message_id: string | null
+  version: number
+  feedback: Feedback | null
+  pending?: boolean
 }
 
 export type ChatSessionDetail = {
@@ -35,7 +58,19 @@ export type User = {
   id: string
   email: string
   full_name: string
+  avatar_url: string | null
   created_at: string
+}
+
+export type Usage = {
+  conversations: number
+  messages: number
+  assistant_answers: number
+  feedback_submitted: number
+}
+
+export type MessageResponse = {
+  message: string
 }
 
 export type TokenResponse = {
@@ -48,12 +83,27 @@ export type TokenResponse = {
 export type AuthSession = {
   email: string
   fullName: string
+  avatarUrl?: string | null
   tokens: TokenResponse
 }
 
+export type StreamStarted = {
+  sessionId: string
+  chatMode: ChatMode
+  responseMode?: 'fast' | 'complex'
+  replyToMessageId: string
+  version: number
+  webEnabled?: boolean
+}
+
+export type StreamDone = Pick<
+  StreamStarted,
+  'sessionId' | 'replyToMessageId' | 'version'
+> & { messageId: string }
+
 export type StreamCallbacks = {
-  onStarted: (sessionId: string, mode: 'fast' | 'complex') => void
+  onStarted: (event: StreamStarted) => void
   onMetadata: (sources: Citation[]) => void
   onDelta: (content: string) => void
-  onDone: (sessionId: string) => void
+  onDone: (event: StreamDone) => void
 }

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Literal
 
-from backend.api.deps import get_chat_service, get_current_user
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from backend.api.deps import get_chat_service, get_current_user, get_feedback_service
 from backend.models.chat import ChatMessageDocument, ChatSessionDocument
 from backend.models.user import UserDocument
 from backend.schemas.chat import (
@@ -15,6 +17,8 @@ from backend.schemas.chat import (
     DeleteSessionResponse,
 )
 from backend.services.chat_service import ChatService, SessionNotFoundError
+from backend.services.feedback_service import FeedbackService
+from backend.schemas.feedback import FeedbackResponse
 
 
 router = APIRouter()
@@ -24,12 +28,16 @@ def _session_response(session: ChatSessionDocument) -> ChatSessionResponse:
     return ChatSessionResponse(
         id=session.id,
         title=session.title,
+        mode=session.mode,
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
 
 
-def _message_response(message: ChatMessageDocument) -> ChatMessageResponse:
+def _message_response(
+    message: ChatMessageDocument,
+    feedback: FeedbackResponse | None = None,
+) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=message.id,
         session_id=message.session_id,
@@ -40,15 +48,19 @@ def _message_response(message: ChatMessageDocument) -> ChatMessageResponse:
             for source in message.sources
         ],
         timestamp=message.timestamp,
+        reply_to_message_id=message.reply_to_message_id,
+        version=message.version,
+        feedback=feedback,
     )
 
 
 @router.get("/sessions", response_model=list[ChatSessionResponse])
 async def list_sessions(
+    mode: Literal["document", "general"] | None = Query(default=None),
     current_user: UserDocument = Depends(get_current_user),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> list[ChatSessionResponse]:
-    sessions = await chat_service.list_sessions(current_user.id)
+    sessions = await chat_service.list_sessions(current_user.id, mode)
     return [_session_response(session) for session in sessions]
 
 
@@ -60,6 +72,7 @@ async def get_session(
     session_id: str,
     current_user: UserDocument = Depends(get_current_user),
     chat_service: ChatService = Depends(get_chat_service),
+    feedback_service: FeedbackService = Depends(get_feedback_service),
 ) -> ChatSessionDetail:
     try:
         session, messages = await chat_service.get_session(
@@ -71,9 +84,20 @@ async def get_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Chat session not found",
         ) from exc
+    feedback_docs = await feedback_service.list_for_session(
+        user_id=current_user.id,
+        session_id=session_id,
+    )
+    feedback_by_message = {
+        feedback.message_id: FeedbackResponse(**feedback.model_dump())
+        for feedback in feedback_docs
+    }
     return ChatSessionDetail(
         session=_session_response(session),
-        messages=[_message_response(message) for message in messages],
+        messages=[
+            _message_response(message, feedback_by_message.get(message.id))
+            for message in messages
+        ],
     )
 
 

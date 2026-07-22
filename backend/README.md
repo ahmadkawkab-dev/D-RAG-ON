@@ -49,6 +49,47 @@ username=person@example.com&password=long-password
 Use the returned access token as `Authorization: Bearer <token>`. Rotate tokens
 with `POST /api/v1/auth/refresh`.
 
+### Password reset email
+
+The login screen supports a six-digit, expiring password-reset code:
+
+- `POST /api/v1/auth/password-reset/request`
+- `POST /api/v1/auth/password-reset/confirm`
+
+Configure delivery with the following `.env` values (all settings use the
+`RAG_` prefix):
+
+```dotenv
+RAG_SMTP_HOST=smtp.example.com
+RAG_SMTP_PORT=587
+RAG_SMTP_FROM_EMAIL=no-reply@example.com
+RAG_SMTP_USERNAME=your-smtp-user
+RAG_SMTP_PASSWORD=your-smtp-password
+RAG_SMTP_STARTTLS=true
+RAG_SMTP_USE_SSL=false
+RAG_PASSWORD_RESET_EXPIRE_MINUTES=10
+RAG_PASSWORD_RESET_MAX_ATTEMPTS=5
+RAG_PASSWORD_RESET_RESEND_SECONDS=60
+```
+
+Use STARTTLS for port 587, or set `RAG_SMTP_USE_SSL=true` and
+`RAG_SMTP_STARTTLS=false` for implicit TLS (commonly port 465). Production
+requires `RAG_SMTP_HOST`. In development only, when SMTP is omitted, the reset
+code is written to the backend log so the flow can be tested locally.
+
+### Account settings
+
+Authenticated account routes are:
+
+- `GET /api/v1/users/me`
+- `PATCH /api/v1/users/me`
+- `POST /api/v1/users/me/password`
+- `GET /api/v1/users/me/usage`
+
+Avatar uploads accept PNG, JPEG, or WebP data URLs up to 512 KB. Password changes
+require the current password. Usage reports conversation, message, assistant
+answer, and submitted-feedback counts.
+
 ## Chat stream
 
 `POST /api/v1/chat/stream` accepts:

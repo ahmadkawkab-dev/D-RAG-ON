@@ -48,7 +48,10 @@ def test_access_and_refresh_tokens_are_not_interchangeable(
 
 def test_production_rejects_development_secret() -> None:
     with pytest.raises(ValidationError, match="must be changed"):
-        Settings(environment="production")
+        Settings(
+            environment="production",
+            jwt_secret_key="dev-only-change-this-secret-key-before-production",
+        )
 
 
 def test_chat_request_rejects_whitespace_only_message() -> None:

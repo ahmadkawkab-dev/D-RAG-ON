@@ -89,6 +89,27 @@ and history replay.
 - Delete the selected session and its messages without affecting other users.
 - Add pagination before unbounded production use.
 
+## Dual-chat milestone
+
+The current application now provides two authenticated chat modes with shared
+history, rendering, feedback, and source contracts:
+
+- Document Chat uses the existing Weaviate-backed RAG pipeline and emits brief,
+  structured citations.
+- General Chat uses the local Ollama model without Weaviate and can optionally
+  use Ollama web search and fetch when RAG_OLLAMA_API_KEY is configured.
+- Chat sessions are separated by mode while sharing the same MongoDB ownership
+  and persistence rules.
+- Assistant responses support regeneration, version browsing, and feedback in a
+  separate MongoDB collection.
+- The frontend keeps active streams running while the user browses other chats
+  and restores buffered output when they return.
+- Shared rendering covers inline citations, source accordions, code blocks,
+  highlighting, feedback controls, and smart scrolling.
+
+Operational follow-ups are to validate Ollama web tools with a user-provided API
+key and correct the current MongoDB Atlas credentials before cloud-backed tests.
+
 ## Production hardening roadmap
 
 ### Phase 1: reliability and security
@@ -124,7 +145,6 @@ and history replay.
 
 ### Phase 4: product capabilities
 
-- Connect the React chat UI to auth, SSE, history, and source accordions.
 - Add session rename, archive, search, and pagination.
 - Add citation-preserving follow-up conversations.
 - Add teams, roles, document sharing, and administrative audit views.

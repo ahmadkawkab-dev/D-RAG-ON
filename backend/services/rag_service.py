@@ -100,13 +100,18 @@ class RAGService:
             or source_file
             or "Untitled document"
         )
-        breadcrumb = metadata.get("breadcrumb")
-        if isinstance(breadcrumb, (list, tuple)):
-            breadcrumb = " / ".join(str(item) for item in breadcrumb if item)
+        raw_breadcrumb = metadata.get("breadcrumb")
+        if isinstance(raw_breadcrumb, (list, tuple)):
+            breadcrumb_items = [str(item) for item in raw_breadcrumb if item]
+        elif raw_breadcrumb:
+            breadcrumb_items = [str(raw_breadcrumb)]
+        else:
+            breadcrumb_items = []
+        breadcrumb_text = " / ".join(breadcrumb_items)
         section = (
             metadata.get("section")
             or metadata.get("clause_number")
-            or breadcrumb
+            or breadcrumb_text
         )
         page = metadata.get("page_number") or metadata.get("page_start")
         try:
@@ -115,12 +120,20 @@ class RAGService:
             page_number = None
         rerank_score = _optional_float(chunk.get("rerank_score"))
         hybrid_score = _optional_float(chunk.get("score"))
+        chunk_text = str(chunk.get("text") or "")
+        chunk_id = metadata.get("chunk_id") or chunk.get("id")
+        summary = " ".join(chunk_text.split())
+        summary = summary if len(summary) <= 280 else f"{summary[:277].rstrip()}..."
         return Citation(
             document_id=str(document_id),
             title=str(title),
             source_url=metadata.get("source_url"),
             file_path=metadata.get("file_path") or source_file,
-            chunk_text=str(chunk.get("text") or ""),
+            chunk_text=chunk_text,
+            chunk_id=str(chunk_id) if chunk_id else None,
+            breadcrumb=breadcrumb_items,
+            summary=summary,
+            metadata=metadata,
             score=rerank_score if rerank_score is not None else hybrid_score,
             relevance=rerank_score,
             page_number=page_number,

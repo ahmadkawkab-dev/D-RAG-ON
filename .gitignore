@@ -65,7 +65,7 @@ vector_store/
 *.sqlite
 *.sqlite3
 *.db
-models/
+/models/
 *.bin
 *.gguf
 .mineru_cache/

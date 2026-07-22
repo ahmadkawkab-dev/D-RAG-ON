@@ -1,0 +1,21 @@
+--- /dev/null
++++ frontend/src/api/client.ts
+@@ -87,4 +87,18 @@
+   return tokens.access_token
+ }
+ 
++function accessTokenNeedsRefresh(token: string, skewSeconds = 30): boolean {
++  try {
++    const payload = token.split('.')[1]
++    if (!payload) return false
++    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/')
++    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
++    const claims = JSON.parse(window.atob(padded)) as { exp?: number }
++    return typeof claims.exp === 'number'
++      && claims.exp <= Math.floor(Date.now() / 1000) + skewSeconds
++  } catch {
++    return false
++  }
++}
++
+ let refreshInFlight: Promise<string> | null = null
