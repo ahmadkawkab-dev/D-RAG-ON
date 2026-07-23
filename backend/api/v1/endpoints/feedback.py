@@ -2,9 +2,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from backend.api.deps import get_current_user, get_feedback_service
+from backend.api.deps import get_internal_user_id, get_feedback_service
 from backend.models.feedback import FeedbackDocument
-from backend.models.user import UserDocument
 from backend.schemas.feedback import FeedbackRequest, FeedbackResponse
 from backend.services.chat_service import SessionNotFoundError
 from backend.services.feedback_service import FeedbackService
@@ -21,12 +20,12 @@ def feedback_response(feedback: FeedbackDocument) -> FeedbackResponse:
 async def save_feedback(
     message_id: str,
     payload: FeedbackRequest,
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     service: FeedbackService = Depends(get_feedback_service),
 ) -> FeedbackResponse:
     try:
         feedback = await service.upsert(
-            user_id=current_user.id,
+            user_id=user_id,
             message_id=message_id,
             direction=payload.direction,
             chips=payload.chips,

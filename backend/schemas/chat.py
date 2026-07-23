@@ -36,7 +36,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
     regenerate_message_id: str | None = None
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
 class ChatResponse(BaseModel):

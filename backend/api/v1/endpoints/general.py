@@ -11,10 +11,9 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.deps import (
     get_chat_service,
-    get_current_user,
+    get_internal_user_id,
     get_general_chat_service,
 )
-from backend.models.user import UserDocument
 from backend.schemas.chat import ChatRequest
 from backend.services.chat_service import ChatService, SessionNotFoundError
 from backend.services.general_chat_service import GeneralChatService
@@ -30,20 +29,20 @@ _END = object()
 async def stream_general_chat(
     payload: ChatRequest,
     request: Request,
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     chat_service: ChatService = Depends(get_chat_service),
     general_service: GeneralChatService = Depends(get_general_chat_service),
 ) -> StreamingResponse:
     try:
         session = await chat_service.get_or_create_session(
-            user_id=current_user.id,
+            user_id=user_id,
             session_id=payload.session_id,
             first_message=payload.message,
             mode="general",
         )
         if payload.regenerate_message_id:
             prompt_message = await chat_service.get_message(
-                user_id=current_user.id,
+                user_id=user_id,
                 session_id=session.id,
                 message_id=payload.regenerate_message_id,
             )
@@ -60,7 +59,7 @@ async def stream_general_chat(
             reply_to_message_id=prompt_message.id,
         )
         _, stored_messages = await chat_service.get_session(
-            user_id=current_user.id,
+            user_id=user_id,
             session_id=session.id,
         )
     except SessionNotFoundError as exc:

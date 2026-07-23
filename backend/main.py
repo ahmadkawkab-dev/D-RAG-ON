@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.v1.router import api_router
 from backend.core.config import Settings, get_settings
@@ -19,11 +18,6 @@ from backend.services.general_chat_service import GeneralChatService
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime_settings = settings or get_settings()
-    development_origin_regex = (
-        r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
-        if runtime_settings.environment in {"development", "test"}
-        else None
-    )
     mongodb = MongoManager()
     weaviate = WeaviateManager()
 
@@ -57,14 +51,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=runtime_settings.debug,
         version="0.1.0",
         lifespan=lifespan,
-    )
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=runtime_settings.cors_origins,
-        allow_origin_regex=development_origin_regex,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
     )
     application.include_router(
         api_router,

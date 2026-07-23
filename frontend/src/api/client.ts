@@ -5,17 +5,15 @@ import type {
   ChatSessionDetail,
   Citation,
   Feedback,
-  MessageResponse,
   StreamCallbacks,
   TokenResponse,
-  Usage,
   User,
 } from './types'
 
-const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:7187'
 export const API_BASE_URL = configuredBaseUrl.replace(/\/$/, '')
-const API_V1_URL = `${API_BASE_URL}/api/v1`
-const AUTH_STORAGE_KEY = 'pixel-mind.auth'
+
+let accessToken: string | null = null
 
 export class ApiError extends Error {
   status: number
@@ -34,59 +32,44 @@ export class AuthenticationError extends ApiError {
   }
 }
 
-export function getStoredAuth(): AuthSession | null {
-  try {
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<AuthSession>
-    if (!value.email || !value.fullName || !value.tokens?.access_token || !value.tokens.refresh_token) {
-      clearStoredAuth()
-      return null
-    }
-    return value as AuthSession
-  } catch {
-    clearStoredAuth()
-    return null
-  }
-}
-
-export function storeAuth(auth: AuthSession) {
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth))
+export function beginGoogleLogin() {
+  window.location.assign(`${API_BASE_URL}/api/auth/login/google`)
 }
 
 export function clearStoredAuth() {
-  window.localStorage.removeItem(AUTH_STORAGE_KEY)
+  accessToken = null
 }
 
 async function errorFromResponse(response: Response): Promise<ApiError> {
   try {
-    const body = await response.json() as { detail?: string | Array<{ msg?: string }> }
+    const body = await response.json() as {
+      detail?: string | Array<{ msg?: string }>
+      message?: string
+    }
+    if (typeof body.message === 'string') return new ApiError(body.message, response.status)
     if (typeof body.detail === 'string') return new ApiError(body.detail, response.status)
     if (Array.isArray(body.detail)) {
       const detail = body.detail.map((item) => item.msg).filter(Boolean).join(', ')
       if (detail) return new ApiError(detail, response.status)
     }
   } catch {
-    // Use the HTTP status fallback for non-JSON server or proxy errors.
+    // Use the HTTP status fallback for non-JSON proxy errors.
   }
   return new ApiError(response.statusText || 'The API request failed', response.status)
 }
 
 async function requestTokenRefresh(): Promise<string> {
-  const auth = getStoredAuth()
-  if (!auth) throw new AuthenticationError()
-  const response = await fetch(`${API_V1_URL}/auth/refresh`, {
+  const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: auth.tokens.refresh_token }),
+    credentials: 'include',
   })
   if (!response.ok) {
     clearStoredAuth()
     throw new AuthenticationError()
   }
   const tokens = await response.json() as TokenResponse
-  storeAuth({ ...auth, tokens })
-  return tokens.access_token
+  accessToken = tokens.access_token
+  return accessToken
 }
 
 function accessTokenNeedsRefresh(token: string, skewSeconds = 30): boolean {
@@ -99,7 +82,7 @@ function accessTokenNeedsRefresh(token: string, skewSeconds = 30): boolean {
     return typeof claims.exp === 'number'
       && claims.exp <= Math.floor(Date.now() / 1000) + skewSeconds
   } catch {
-    return false
+    return true
   }
 }
 
@@ -119,129 +102,67 @@ async function authorizedFetch(
   init: RequestInit = {},
   mayRefresh = true,
 ): Promise<Response> {
-  const auth = getStoredAuth()
-  if (!auth) throw new AuthenticationError()
-  let accessToken = auth.tokens.access_token
-  if (mayRefresh && accessTokenNeedsRefresh(accessToken)) {
-    accessToken = await refreshAccessToken()
+  let token = accessToken
+  if (!token || (mayRefresh && accessTokenNeedsRefresh(token))) {
+    token = await refreshAccessToken()
   }
   const headers = new Headers(init.headers)
-  headers.set('Authorization', `Bearer ${accessToken}`)
-  const response = await fetch(`${API_V1_URL}${path}`, { ...init, headers })
+  headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+    credentials: 'include',
+  })
   if (response.status === 401 && mayRefresh) {
-    const accessToken = await refreshAccessToken()
-    headers.set('Authorization', `Bearer ${accessToken}`)
+    token = await refreshAccessToken()
+    headers.set('Authorization', `Bearer ${token}`)
     return authorizedFetch(path, { ...init, headers }, false)
   }
   if (!response.ok) throw await errorFromResponse(response)
   return response
 }
 
-export async function register(
-  email: string,
-  password: string,
-  fullName: string,
-): Promise<User> {
-  const response = await fetch(`${API_V1_URL}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, full_name: fullName }),
-  })
-  if (!response.ok) throw await errorFromResponse(response)
-  return response.json() as Promise<User>
-}
-
-export async function login(email: string, password: string): Promise<TokenResponse> {
-  const form = new URLSearchParams({ username: email, password })
-  const response = await fetch(`${API_V1_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form,
-  })
-  if (!response.ok) throw await errorFromResponse(response)
-  return response.json() as Promise<TokenResponse>
-}
-
-
-export async function requestPasswordReset(email: string): Promise<MessageResponse> {
-  const response = await fetch(API_V1_URL + '/auth/password-reset/request', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  })
-  if (!response.ok) throw await errorFromResponse(response)
-  return response.json() as Promise<MessageResponse>
-}
-
-export async function confirmPasswordReset(
-  email: string,
-  code: string,
-  newPassword: string,
-): Promise<MessageResponse> {
-  const response = await fetch(API_V1_URL + '/auth/password-reset/confirm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, code, new_password: newPassword }),
-  })
-  if (!response.ok) throw await errorFromResponse(response)
-  return response.json() as Promise<MessageResponse>
-}
-
 export async function getProfile(): Promise<User> {
-  const response = await authorizedFetch('/users/me')
+  const response = await authorizedFetch('/api/auth/me')
   return response.json() as Promise<User>
 }
 
-export async function updateProfile(payload: {
-  fullName?: string
-  avatarUrl?: string | null
-}): Promise<User> {
-  const body: { full_name?: string; avatar_url?: string | null } = {}
-  if (payload.fullName !== undefined) body.full_name = payload.fullName
-  if (payload.avatarUrl !== undefined) body.avatar_url = payload.avatarUrl
-  const response = await authorizedFetch('/users/me', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  return response.json() as Promise<User>
+export async function restoreSession(): Promise<AuthSession> {
+  await refreshAccessToken()
+  const profile = await getProfile()
+  return {
+    email: profile.email,
+    fullName: profile.display_name ?? profile.email.split('@')[0] ?? 'User',
+    avatarUrl: profile.avatar_url,
+  }
 }
 
-export async function changePassword(
-  currentPassword: string,
-  newPassword: string,
-): Promise<MessageResponse> {
-  const response = await authorizedFetch('/users/me/password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      current_password: currentPassword,
-      new_password: newPassword,
-    }),
-  })
-  return response.json() as Promise<MessageResponse>
-}
-
-export async function getUsage(): Promise<Usage> {
-  const response = await authorizedFetch('/users/me/usage')
-  return response.json() as Promise<Usage>
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+  } finally {
+    clearStoredAuth()
+  }
 }
 
 export async function listSessions(mode?: ChatMode): Promise<ChatSession[]> {
   const query = mode ? `?mode=${encodeURIComponent(mode)}` : ''
-  const response = await authorizedFetch(`/history/sessions${query}`)
+  const response = await authorizedFetch(`/api/rag/history/sessions${query}`)
   return response.json() as Promise<ChatSession[]>
 }
 
 export async function getSession(sessionId: string): Promise<ChatSessionDetail> {
   const response = await authorizedFetch(
-    `/history/sessions/${encodeURIComponent(sessionId)}`,
+    `/api/rag/history/sessions/${encodeURIComponent(sessionId)}`,
   )
   return response.json() as Promise<ChatSessionDetail>
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  await authorizedFetch(`/history/sessions/${encodeURIComponent(sessionId)}`, {
+  await authorizedFetch(`/api/rag/history/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'DELETE',
   })
 }
@@ -253,7 +174,7 @@ export async function saveFeedback(
   comment = '',
 ): Promise<Feedback> {
   const response = await authorizedFetch(
-    `/feedback/messages/${encodeURIComponent(messageId)}`,
+    `/api/rag/feedback/messages/${encodeURIComponent(messageId)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -287,7 +208,9 @@ export async function streamChat(
   callbacks: StreamCallbacks,
   options: { regenerateMessageId?: string; signal?: AbortSignal } = {},
 ): Promise<void> {
-  const endpoint = mode === 'general' ? '/general/stream' : '/chat/stream'
+  const endpoint = mode === 'general'
+    ? '/api/rag/general/stream'
+    : '/api/rag/document/stream'
   const response = await authorizedFetch(endpoint, {
     method: 'POST',
     headers: {
@@ -344,9 +267,7 @@ export async function streamChat(
         version: payload.version ?? 1,
       })
     }
-    if (frame.event === 'error') {
-      throw new ApiError(payload.detail ?? 'The chat stream failed')
-    }
+    if (frame.event === 'error') throw new ApiError(payload.detail ?? 'The chat stream failed')
   }
 
   while (true) {

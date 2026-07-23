@@ -4,53 +4,23 @@ import pytest
 from pydantic import ValidationError
 
 from backend.core.config import Settings
-from backend.core.security import (
-    InvalidTokenError,
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    hash_password,
-    verify_password,
-)
 from backend.schemas.chat import ChatRequest
 
 
-@pytest.fixture
-def settings() -> Settings:
-    return Settings(
-        environment="test",
-        connect_external_services_on_startup=False,
-        jwt_secret_key="test-secret-key-that-is-longer-than-32-bytes",
-    )
+def test_internal_service_key_must_be_strong_when_configured() -> None:
+    with pytest.raises(ValidationError, match="at least 32 characters"):
+        Settings(
+            environment="test",
+            connect_external_services_on_startup=False,
+            internal_api_key="too-short",
+        )
 
 
-def test_password_hash_round_trip() -> None:
-    hashed = hash_password("correct-horse-battery-staple")
-
-    assert hashed != "correct-horse-battery-staple"
-    assert verify_password("correct-horse-battery-staple", hashed)
-    assert not verify_password("wrong-password", hashed)
-
-
-def test_access_and_refresh_tokens_are_not_interchangeable(
-    settings: Settings,
-) -> None:
-    access = create_access_token("user-1", settings)
-    refresh = create_refresh_token("user-1", settings)
-
-    assert decode_token(access, "access", settings).sub == "user-1"
-    assert decode_token(refresh, "refresh", settings).sub == "user-1"
-    with pytest.raises(InvalidTokenError):
-        decode_token(access, "refresh", settings)
-    with pytest.raises(InvalidTokenError):
-        decode_token(refresh, "access", settings)
-
-
-def test_production_rejects_development_secret() -> None:
-    with pytest.raises(ValidationError, match="must be changed"):
+def test_production_requires_internal_service_authentication() -> None:
+    with pytest.raises(ValidationError, match="required in production"):
         Settings(
             environment="production",
-            jwt_secret_key="dev-only-change-this-secret-key-before-production",
+            connect_external_services_on_startup=False,
         )
 
 

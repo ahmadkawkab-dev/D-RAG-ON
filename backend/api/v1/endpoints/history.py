@@ -6,9 +6,8 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from backend.api.deps import get_chat_service, get_current_user, get_feedback_service
+from backend.api.deps import get_chat_service, get_internal_user_id, get_feedback_service
 from backend.models.chat import ChatMessageDocument, ChatSessionDocument
-from backend.models.user import UserDocument
 from backend.schemas.chat import (
     ChatMessageResponse,
     ChatSessionDetail,
@@ -57,10 +56,10 @@ def _message_response(
 @router.get("/sessions", response_model=list[ChatSessionResponse])
 async def list_sessions(
     mode: Literal["document", "general"] | None = Query(default=None),
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> list[ChatSessionResponse]:
-    sessions = await chat_service.list_sessions(current_user.id, mode)
+    sessions = await chat_service.list_sessions(user_id, mode)
     return [_session_response(session) for session in sessions]
 
 
@@ -70,13 +69,13 @@ async def list_sessions(
 )
 async def get_session(
     session_id: str,
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     chat_service: ChatService = Depends(get_chat_service),
     feedback_service: FeedbackService = Depends(get_feedback_service),
 ) -> ChatSessionDetail:
     try:
         session, messages = await chat_service.get_session(
-            user_id=current_user.id,
+            user_id=user_id,
             session_id=session_id,
         )
     except SessionNotFoundError as exc:
@@ -85,7 +84,7 @@ async def get_session(
             detail="Chat session not found",
         ) from exc
     feedback_docs = await feedback_service.list_for_session(
-        user_id=current_user.id,
+        user_id=user_id,
         session_id=session_id,
     )
     feedback_by_message = {
@@ -107,12 +106,12 @@ async def get_session(
 )
 async def delete_session(
     session_id: str,
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> DeleteSessionResponse:
     try:
         await chat_service.delete_session(
-            user_id=current_user.id,
+            user_id=user_id,
             session_id=session_id,
         )
     except SessionNotFoundError as exc:

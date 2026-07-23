@@ -57,25 +57,13 @@ export type ChatSessionDetail = {
 export type User = {
   id: string
   email: string
-  full_name: string
+  display_name: string | null
   avatar_url: string | null
-  created_at: string
-}
-
-export type Usage = {
-  conversations: number
-  messages: number
-  assistant_answers: number
-  feedback_submitted: number
-}
-
-export type MessageResponse = {
-  message: string
+  roles: string[]
 }
 
 export type TokenResponse = {
   access_token: string
-  refresh_token: string
   token_type: string
   expires_in: number
 }
@@ -84,7 +72,6 @@ export type AuthSession = {
   email: string
   fullName: string
   avatarUrl?: string | null
-  tokens: TokenResponse
 }
 
 export type StreamStarted = {

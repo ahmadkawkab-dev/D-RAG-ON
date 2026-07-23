@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Validated server-side configuration.
 
     Browser clients never choose service hosts, filesystem paths, or model IDs.
-    Production refuses to start with the development JWT secret.
+    Internal service authentication is mandatory in production.
     """
 
     model_config = SettingsConfigDict(
@@ -28,9 +28,6 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
-    cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:5173"]
-    )
     connect_external_services_on_startup: bool = True
 
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -56,6 +53,7 @@ class Settings(BaseSettings):
     general_web_cache_ttl_seconds: float = Field(default=120.0, ge=1.0, le=3600.0)
     ollama_api_key: SecretStr | None = None
 
+    internal_api_key: SecretStr | None = None
     ollama_host: str = "http://localhost:11434"
     embedding_model: str = "embeddinggemma"
     light_reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
@@ -85,26 +83,6 @@ class Settings(BaseSettings):
     retrieval_cache_ttl_seconds: float = Field(default=300.0, ge=1.0, le=86400.0)
     retrieval_cache_revision: str = "v1"
 
-    smtp_host: str | None = None
-    smtp_port: int = Field(default=587, ge=1, le=65535)
-    smtp_from_email: str = "no-reply@localhost"
-    smtp_username: str | None = None
-    smtp_password: SecretStr | None = None
-    smtp_starttls: bool = True
-    smtp_use_ssl: bool = False
-    smtp_timeout_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
-    password_reset_expire_minutes: int = Field(default=10, ge=5, le=60)
-    password_reset_max_attempts: int = Field(default=5, ge=3, le=10)
-    password_reset_resend_seconds: int = Field(default=60, ge=30, le=3600)
-
-    jwt_secret_key: str = Field(
-        default="dev-only-change-this-secret-key-before-production",
-        min_length=32,
-        repr=False,
-    )
-    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
-    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
-    refresh_token_expire_days: int = Field(default=7, ge=1, le=90)
 
     @model_validator(mode="after")
     def validate_runtime_contract(self) -> "Settings":
@@ -112,15 +90,10 @@ class Settings(BaseSettings):
             raise ValueError("top_n cannot exceed retrieve_k")
         if self.fast_top_n > self.fast_retrieve_k:
             raise ValueError("fast_top_n cannot exceed fast_retrieve_k")
-        if (
-            self.environment == "production"
-            and self.jwt_secret_key.startswith("dev-only-")
-        ):
-            raise ValueError("RAG_JWT_SECRET_KEY must be changed in production")
-        if self.smtp_use_ssl and self.smtp_starttls:
-            raise ValueError("SMTP SSL and STARTTLS cannot both be enabled")
-        if self.environment == "production" and not self.smtp_host:
-            raise ValueError("RAG_SMTP_HOST is required in production")
+        if self.internal_api_key is not None and len(self.internal_api_key.get_secret_value()) < 32:
+            raise ValueError("RAG_INTERNAL_API_KEY must be at least 32 characters")
+        if self.environment == "production" and self.internal_api_key is None:
+            raise ValueError("RAG_INTERNAL_API_KEY is required in production")
         return self
 
 

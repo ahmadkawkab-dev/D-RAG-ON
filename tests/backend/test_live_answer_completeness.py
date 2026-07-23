@@ -8,8 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.backend.test_live_integration import (
+    _internal_headers,
     _parse_sse,
-    _register_and_login,
     live_client,
 )
 
@@ -21,10 +21,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_penetration_testing_answer_is_complete(live_client: TestClient) -> None:
-    tokens = _register_and_login(live_client)
     response = live_client.post(
         "/api/v1/chat/stream",
-        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        headers=_internal_headers(live_client),
         json={"message": "Explain the concept of penetration testing."},
     )
 

@@ -26,10 +26,10 @@ import {
 import {
   ApiError,
   AuthenticationError,
-  clearStoredAuth,
   deleteSession,
   getSession,
-  getStoredAuth,
+  restoreSession,
+  logout,
   listSessions,
   streamChat,
 } from './api/client'
@@ -111,7 +111,7 @@ function isToday(value: string) {
 function readableError(error: unknown) {
   if (error instanceof ApiError) return error.message
   if (error instanceof Error && error.name === 'AbortError') return ''
-  if (error instanceof TypeError) return 'Unable to reach the API. Check that FastAPI is running and the API URL is correct.'
+  if (error instanceof TypeError) return 'Unable to reach the API. Check that the .NET API is running and the API URL is correct.'
   return 'Something went wrong while contacting the API.'
 }
 
@@ -353,7 +353,8 @@ function ChatSidebar({
 }
 
 function ConnectedApp() {
-  const [auth, setAuth] = useState<AuthSession | null>(() => getStoredAuth())
+  const [auth, setAuth] = useState<AuthSession | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
   const [mode, setMode] = useState<ChatMode>('document')
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -401,6 +402,15 @@ function ConnectedApp() {
   const earlierSessions = filteredSessions.filter((session) => !isToday(session.updated_at))
 
   useEffect(() => {
+    let cancelled = false
+    restoreSession()
+      .then((session) => { if (!cancelled) setAuth(session) })
+      .catch(() => { if (!cancelled) setAuth(null) })
+      .finally(() => { if (!cancelled) setAuthLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
     if (!auth) return
     let cancelled = false
     listSessions(mode)
@@ -408,7 +418,7 @@ function ConnectedApp() {
       .catch((caught) => {
         if (cancelled) return
         if (caught instanceof AuthenticationError) {
-          clearStoredAuth()
+          void logout()
           setAuth(null)
         }
         setError(readableError(caught))
@@ -444,11 +454,12 @@ function ConnectedApp() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  if (!auth) return <AuthPanel onAuthenticated={setAuth} />
+  if (authLoading) return <AuthPanel loading />
+  if (!auth) return <AuthPanel />
 
   const handleApiError = (caught: unknown, title = 'Request failed') => {
     if (caught instanceof AuthenticationError) {
-      clearStoredAuth()
+      void logout()
       setAuth(null)
     }
     const message = readableError(caught)
@@ -535,7 +546,7 @@ function ConnectedApp() {
 
   const signOut = () => {
     streamController.current?.abort()
-    clearStoredAuth()
+    void logout()
     setAuth(null)
     setSessions([])
     backgroundMessages.current.clear()

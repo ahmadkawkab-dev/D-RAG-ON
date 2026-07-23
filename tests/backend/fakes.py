@@ -97,8 +97,6 @@ class FakeCollection:
 
 class FakeDatabase:
     def __init__(self) -> None:
-        self.users = FakeCollection()
-        self.password_reset_codes = FakeCollection()
         self.chat_sessions = FakeCollection()
         self.chat_messages = FakeCollection()
         self.feedback = FakeCollection()

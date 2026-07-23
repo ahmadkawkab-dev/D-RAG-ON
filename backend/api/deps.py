@@ -1,24 +1,18 @@
-"""FastAPI dependency injection for settings, databases, services, and users."""
+"""FastAPI dependency injection for internal service requests."""
 
 from __future__ import annotations
 
+import hmac
 from typing import Annotated, Any
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from backend.core.config import Settings
-from backend.core.security import InvalidTokenError, decode_token
-from backend.models.user import UserDocument
 from backend.services.chat_service import ChatService
-from backend.services.email_service import EmailService
 from backend.services.feedback_service import FeedbackService
 from backend.services.general_chat_service import GeneralChatService
 from backend.services.llm_service import LLMService
 from backend.services.rag_service import RAGService
-
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -41,12 +35,6 @@ def get_general_chat_service(request: Request) -> GeneralChatService:
     return request.app.state.general_chat_service
 
 
-def get_email_service(
-    settings: Settings = Depends(get_app_settings),
-) -> EmailService:
-    return EmailService(settings)
-
-
 def get_feedback_service(database: Any = Depends(get_db)) -> FeedbackService:
     return FeedbackService(database)
 
@@ -55,21 +43,39 @@ def get_chat_service(database: Any = Depends(get_db)) -> ChatService:
     return ChatService(database)
 
 
-async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    database: Any = Depends(get_db),
+async def get_internal_user_id(
     settings: Settings = Depends(get_app_settings),
-) -> UserDocument:
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        claims = decode_token(token, "access", settings)
-    except InvalidTokenError as exc:
-        raise credentials_error from exc
-    document = await database.users.find_one({"_id": claims.sub})
-    if document is None:
-        raise credentials_error
-    return UserDocument.model_validate(document)
+    supplied_api_key: Annotated[
+        str | None,
+        Header(alias="X-RAG-API-Key"),
+    ] = None,
+    application_user_id: Annotated[
+        str | None,
+        Header(alias="X-Application-User-Id"),
+    ] = None,
+) -> str:
+    configured = settings.internal_api_key
+    if configured is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal service authentication is not configured",
+        )
+    expected = configured.get_secret_value()
+    if not supplied_api_key or not hmac.compare_digest(
+        supplied_api_key.encode("utf-8"),
+        expected.encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal service credential",
+        )
+    if (
+        not application_user_id
+        or len(application_user_id) > 128
+        or not application_user_id.replace("-", "").isalnum()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid application user context",
+        )
+    return application_user_id

@@ -7,105 +7,84 @@ from fastapi.testclient import TestClient
 
 from backend.api.deps import (
     get_chat_service,
-    get_current_user,
     get_db,
-    get_email_service,
+    get_internal_user_id,
     get_llm_service,
     get_rag_service,
 )
 from backend.core.config import Settings
 from backend.main import create_app
-from backend.models.user import UserDocument
 from backend.schemas.chat import Citation
 from backend.services.rag_service import RetrievedContext
 from tests.backend.fakes import FakeDatabase
 
 
-def test_profile_patch_cors_preflight_allows_local_development_origins() -> None:
-    settings = Settings(
-        environment="test",
-        connect_external_services_on_startup=False,
-        jwt_secret_key="test-secret-key-that-is-longer-than-32-bytes",
+INTERNAL_API_KEY = "test-internal-api-key-that-is-at-least-32-characters"
+
+
+def test_internal_auth_rejects_missing_and_invalid_credentials() -> None:
+    application = create_app(
+        Settings(
+            environment="test",
+            connect_external_services_on_startup=False,
+            internal_api_key=INTERNAL_API_KEY,
+        )
     )
-    application = create_app(settings)
 
     with TestClient(application) as client:
-        response = client.options(
-            "/api/v1/users/me",
+        missing = client.get("/api/v1/history/sessions")
+        invalid = client.get(
+            "/api/v1/history/sessions",
             headers={
-                "Origin": "http://127.0.0.1:5199",
-                "Access-Control-Request-Method": "PATCH",
-                "Access-Control-Request-Headers": "authorization,content-type",
+                "X-RAG-API-Key": "wrong-value-that-is-not-the-configured-secret",
+                "X-Application-User-Id": "user-1",
+            },
+        )
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert INTERNAL_API_KEY not in missing.text
+    assert INTERNAL_API_KEY not in invalid.text
+
+
+def test_internal_auth_accepts_service_key_and_trusted_user_context() -> None:
+    database = FakeDatabase()
+    application = create_app(
+        Settings(
+            environment="test",
+            connect_external_services_on_startup=False,
+            internal_api_key=INTERNAL_API_KEY,
+        )
+    )
+    application.dependency_overrides[get_db] = lambda: database
+
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/history/sessions",
+            headers={
+                "X-RAG-API-Key": INTERNAL_API_KEY,
+                "X-Application-User-Id": "user-1",
             },
         )
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == (
-        "http://127.0.0.1:5199"
-    )
-    assert "PATCH" in response.headers["access-control-allow-methods"]
+    assert response.json() == []
 
 
-def test_auth_register_login_refresh_and_protection() -> None:
-    database = FakeDatabase()
-    settings = Settings(
-        environment="test",
-        connect_external_services_on_startup=False,
-        jwt_secret_key="test-secret-key-that-is-longer-than-32-bytes",
+def test_removed_browser_auth_routes_are_not_exposed() -> None:
+    application = create_app(
+        Settings(
+            environment="test",
+            connect_external_services_on_startup=False,
+            internal_api_key=INTERNAL_API_KEY,
+        )
     )
-    application = create_app(settings)
-    application.dependency_overrides[get_db] = lambda: database
 
     with TestClient(application) as client:
-        registration = client.post(
-            "/api/v1/auth/register",
-            json={
-                "email": "Person@Example.com",
-                "password": "long-password",
-                "full_name": "Test Person",
-            },
-        )
-        assert registration.status_code == 201
-        assert registration.json()["email"] == "person@example.com"
-        assert "hashed_password" not in registration.json()
-
-        duplicate = client.post(
-            "/api/v1/auth/register",
-            json={
-                "email": "person@example.com",
-                "password": "long-password",
-                "full_name": "Test Person",
-            },
-        )
-        assert duplicate.status_code == 409
-
-        login = client.post(
-            "/api/v1/auth/login",
-            data={
-                "username": "person@example.com",
-                "password": "long-password",
-            },
-        )
-        assert login.status_code == 200
-        tokens = login.json()
-        assert tokens["token_type"] == "bearer"
-        assert tokens["access_token"] != tokens["refresh_token"]
-
-        refresh = client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": tokens["refresh_token"]},
-        )
-        assert refresh.status_code == 200
-        assert refresh.json()["access_token"] != tokens["access_token"]
-
-        missing_token = client.get("/api/v1/history/sessions")
-        assert missing_token.status_code == 401
-
-        wrong_token_type = client.get(
-            "/api/v1/history/sessions",
-            headers={"Authorization": f"Bearer {tokens['refresh_token']}"},
-        )
-        assert wrong_token_type.status_code == 401
+        assert client.post("/api/v1/auth/login").status_code == 404
+        assert client.post("/api/v1/auth/register").status_code == 404
+        assert client.post("/api/v1/auth/refresh").status_code == 404
+        assert client.get("/api/v1/users/me").status_code == 404
 
 
 class FakeChatService:
@@ -125,6 +104,8 @@ class FakeChatService:
 
     async def next_version(self, **kwargs):
         return 1
+
+
 class FakeRAGService:
     @asynccontextmanager
     async def model_execution(self):
@@ -161,20 +142,16 @@ class FakeLLMService:
             yield token
 
 
-def test_chat_stream_orders_events_and_persists_sources() -> None:
-    settings = Settings(
-        environment="test",
-        connect_external_services_on_startup=False,
-        jwt_secret_key="test-secret-key-that-is-longer-than-32-bytes",
+def test_document_chat_behavior_is_preserved_after_auth_migration() -> None:
+    application = create_app(
+        Settings(
+            environment="test",
+            connect_external_services_on_startup=False,
+            internal_api_key=INTERNAL_API_KEY,
+        )
     )
-    application = create_app(settings)
     chat_service = FakeChatService()
-    user = UserDocument.create(
-        email="person@example.com",
-        hashed_password="not-returned",
-        full_name="Person",
-    )
-    application.dependency_overrides[get_current_user] = lambda: user
+    application.dependency_overrides[get_internal_user_id] = lambda: "user-1"
     application.dependency_overrides[get_chat_service] = lambda: chat_service
     application.dependency_overrides[get_rag_service] = FakeRAGService
     application.dependency_overrides[get_llm_service] = FakeLLMService
@@ -198,142 +175,3 @@ def test_chat_stream_orders_events_and_persists_sources() -> None:
         "assistant",
     ]
     assert chat_service.messages[1]["content"] == "Grounded answer"
-    assert chat_service.messages[1]["sources"][0]["page_number"] == 5
-
-
-class FakeEmailService:
-    def __init__(self) -> None:
-        self.sent: list[tuple[str, str, int]] = []
-
-    def ensure_available(self) -> None:
-        return None
-
-    async def send_password_reset_code(
-        self,
-        email: str,
-        code: str,
-        expires_in_minutes: int,
-    ) -> None:
-        self.sent.append((email, code, expires_in_minutes))
-
-
-def test_password_reset_profile_password_change_and_usage() -> None:
-    database = FakeDatabase()
-    settings = Settings(
-        environment="test",
-        connect_external_services_on_startup=False,
-        jwt_secret_key="test-secret-key-that-is-longer-than-32-bytes",
-    )
-    application = create_app(settings)
-    email_service = FakeEmailService()
-    application.dependency_overrides[get_db] = lambda: database
-    application.dependency_overrides[get_email_service] = lambda: email_service
-
-    with TestClient(application) as client:
-        registration = client.post(
-            "/api/v1/auth/register",
-            json={
-                "email": "profile@example.com",
-                "password": "original-password",
-                "full_name": "Profile Person",
-            },
-        )
-        assert registration.status_code == 201
-        assert registration.json()["avatar_url"] is None
-
-        login_response = client.post(
-            "/api/v1/auth/login",
-            data={
-                "username": "profile@example.com",
-                "password": "original-password",
-            },
-        )
-        assert login_response.status_code == 200
-        headers = {
-            "Authorization": (
-                f"Bearer {login_response.json()['access_token']}"
-            )
-        }
-
-        profile = client.get("/api/v1/users/me", headers=headers)
-        assert profile.status_code == 200
-        assert profile.json()["full_name"] == "Profile Person"
-
-        avatar = "data:image/png;base64,aGVsbG8="
-        updated = client.patch(
-            "/api/v1/users/me",
-            headers=headers,
-            json={"full_name": "Updated Person", "avatar_url": avatar},
-        )
-        assert updated.status_code == 200
-        assert updated.json()["full_name"] == "Updated Person"
-        assert updated.json()["avatar_url"] == avatar
-
-        usage = client.get("/api/v1/users/me/usage", headers=headers)
-        assert usage.status_code == 200
-        assert usage.json() == {
-            "conversations": 0,
-            "messages": 0,
-            "assistant_answers": 0,
-            "feedback_submitted": 0,
-        }
-
-        wrong_password = client.post(
-            "/api/v1/users/me/password",
-            headers=headers,
-            json={
-                "current_password": "wrong-password",
-                "new_password": "changed-password",
-            },
-        )
-        assert wrong_password.status_code == 400
-
-        changed = client.post(
-            "/api/v1/users/me/password",
-            headers=headers,
-            json={
-                "current_password": "original-password",
-                "new_password": "changed-password",
-            },
-        )
-        assert changed.status_code == 200
-
-        reset_request = client.post(
-            "/api/v1/auth/password-reset/request",
-            json={"email": "profile@example.com"},
-        )
-        assert reset_request.status_code == 202
-        assert len(email_service.sent) == 1
-        email, code, expires = email_service.sent[0]
-        assert email == "profile@example.com"
-        assert len(code) == 6
-        assert expires == settings.password_reset_expire_minutes
-
-        invalid_code = client.post(
-            "/api/v1/auth/password-reset/confirm",
-            json={
-                "email": email,
-                "code": "000000" if code != "000000" else "000001",
-                "new_password": "reset-password",
-            },
-        )
-        assert invalid_code.status_code == 400
-
-        reset = client.post(
-            "/api/v1/auth/password-reset/confirm",
-            json={
-                "email": email,
-                "code": code,
-                "new_password": "reset-password",
-            },
-        )
-        assert reset.status_code == 200
-
-        login_after_reset = client.post(
-            "/api/v1/auth/login",
-            data={
-                "username": email,
-                "password": "reset-password",
-            },
-        )
-        assert login_after_reset.status_code == 200

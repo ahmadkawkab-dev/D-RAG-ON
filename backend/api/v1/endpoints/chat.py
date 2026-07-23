@@ -10,11 +10,10 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.deps import (
     get_chat_service,
-    get_current_user,
+    get_internal_user_id,
     get_llm_service,
     get_rag_service,
 )
-from backend.models.user import UserDocument
 from backend.schemas.chat import ChatRequest
 from backend.services.chat_service import ChatService, SessionNotFoundError
 from backend.services.llm_service import LLMService
@@ -30,14 +29,14 @@ ABSTENTION_RESPONSE = "Question irrelevant to the available document context."
 @router.post("/stream", response_class=StreamingResponse)
 async def stream_chat(
     payload: ChatRequest,
-    current_user: UserDocument = Depends(get_current_user),
+    user_id: str = Depends(get_internal_user_id),
     chat_service: ChatService = Depends(get_chat_service),
     rag_service: RAGService = Depends(get_rag_service),
     llm_service: LLMService = Depends(get_llm_service),
 ) -> StreamingResponse:
     try:
         session = await chat_service.get_or_create_session(
-            user_id=current_user.id,
+            user_id=user_id,
             session_id=payload.session_id,
             first_message=payload.message,
             mode="document",
@@ -51,7 +50,7 @@ async def stream_chat(
     try:
         if payload.regenerate_message_id:
             prompt_message = await chat_service.get_message(
-                user_id=current_user.id,
+                user_id=user_id,
                 session_id=session.id,
                 message_id=payload.regenerate_message_id,
             )

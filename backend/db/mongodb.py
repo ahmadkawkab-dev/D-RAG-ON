@@ -38,21 +38,6 @@ class MongoManager:
         self._database = database
 
     async def _create_indexes(self, database: AsyncIOMotorDatabase) -> None:
-        await database.users.create_index(
-            [("email", ASCENDING)],
-            unique=True,
-            name="users_email_unique",
-        )
-        await database.password_reset_codes.create_index(
-            [("email", ASCENDING)],
-            unique=True,
-            name="password_reset_email_unique",
-        )
-        await database.password_reset_codes.create_index(
-            [("expires_at", ASCENDING)],
-            expireAfterSeconds=0,
-            name="password_reset_expiry",
-        )
         await database.chat_sessions.create_index(
             [("user_id", ASCENDING), ("mode", ASCENDING), ("updated_at", DESCENDING)],
             name="sessions_user_mode_updated",
