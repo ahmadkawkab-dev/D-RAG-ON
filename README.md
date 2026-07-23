@@ -1,4 +1,4 @@
-D-RAG-ON — README (Polished)
+D-RAG-ON — README 
 
 One-line summary
 
