@@ -65,3 +65,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+ 
+## uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000

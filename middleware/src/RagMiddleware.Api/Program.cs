@@ -102,8 +102,12 @@ builder.Services.AddHttpClient<IRagApiClient, RagApiClient>((services, client) =
     })
     .AddStandardResilienceHandler(options =>
     {
-        options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(15);
-        options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(15);
+        options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(900);
+        options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(300);
+
+        options.CircuitBreaker.SamplingDuration =
+            TimeSpan.FromSeconds(600);
+
         options.Retry.MaxRetryAttempts = 2;
         options.Retry.BackoffType = Polly.DelayBackoffType.Exponential;
         options.Retry.UseJitter = true;
