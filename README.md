@@ -142,10 +142,6 @@ Developer & contribution notes
 - The repo includes ingestion tooling, notebooks, and evaluation scripts. See `parse.py`, `main.py`, `ingestion/` and `notebooks/` for developer utilities.
 - Please do not check secrets into source control. Use environment variables or OS-level secret storage.
 
-References
-
-- launch_walkthrough.md — detailed copy-pasteable walkthrough with troubleshooting and verification steps (created alongside this README)
-- docs/ — additional documentation (security, runbook, audit): docs/runbook.md, docs/hardening.md, docs/security-endpoints.md
 
 License
 
@@ -153,9 +149,6 @@ This project is provided under the LICENSE file in the repository root.
 
 ---
 
-Next steps
-
-If you want this polished README to replace the existing README.md, I can either:
 
 1) Overwrite README.md with this content (create a backup first), or
 2) Commit README_POLISHED.md as an additional file and open a branch/PR with the change.
