@@ -25,6 +25,12 @@ public interface IRagApiClient
         string userId,
         CancellationToken cancellationToken);
 
+    Task<DocumentUploadResponse> UploadDocumentAsync(
+        Stream stream,
+        long sizeBytes,
+        string userId,
+        CancellationToken cancellationToken);
+
     Task<FeedbackResponse> SaveFeedbackAsync(
         string messageId,
         FeedbackRequest request,

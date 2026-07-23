@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
@@ -96,7 +97,8 @@ public sealed class RagApiClientTests
             {
                 BaseUrl = "http://python.internal",
                 ApiKey = ApiKey
-            }));
+            }),
+            new HttpContextAccessor());
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) =>
         new(status)

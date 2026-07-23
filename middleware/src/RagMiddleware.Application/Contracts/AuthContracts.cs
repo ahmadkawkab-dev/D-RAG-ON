@@ -20,5 +20,5 @@ public sealed record UserResponse(
     IReadOnlyList<string> Roles)
 {
     public static UserResponse FromUser(ApplicationUser user) =>
-        new(user.Id, user.Email, user.DisplayName, user.AvatarUrl, []);
+        new(user.Id, user.Email, user.DisplayName, user.AvatarUrl, user.Roles);
 }

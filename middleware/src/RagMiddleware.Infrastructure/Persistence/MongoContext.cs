@@ -18,4 +18,6 @@ public sealed class MongoContext
         Database.GetCollection<ApplicationUser>("application_users");
     public IMongoCollection<RefreshToken> RefreshTokens =>
         Database.GetCollection<RefreshToken>("refresh_tokens");
+    public IMongoCollection<AuditLog> AuditLogs =>
+        Database.GetCollection<AuditLog>("audit_logs");
 }

@@ -23,6 +23,7 @@ public sealed class JwtTokenServiceTests
         Assert.Equal("rag-middleware", jwt.Issuer);
         Assert.Contains("rag-ui", jwt.Audiences);
         Assert.Equal(user.Id, jwt.Subject);
+        Assert.Contains(jwt.Claims, claim => claim.Type == "role" && claim.Value == "Admin");
         Assert.Single(refresh.Tokens);
         Assert.NotEqual(pair.RefreshToken, refresh.Tokens[0].TokenHash);
         Assert.DoesNotContain(pair.RefreshToken, jwt.Claims.Select(x => x.Value));
@@ -63,7 +64,8 @@ public sealed class JwtTokenServiceTests
         GoogleSubject = "google-subject",
         Email = "person@example.com",
         NormalizedEmail = "PERSON@EXAMPLE.COM",
-        DisplayName = "Person"
+        DisplayName = "Person",
+        Roles = ["Admin"]
     };
 
     private sealed class UserRepository(ApplicationUser user) : IUserRepository

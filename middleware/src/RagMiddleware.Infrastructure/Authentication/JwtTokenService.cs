@@ -25,7 +25,11 @@ public sealed class JwtTokenService(
         CancellationToken cancellationToken = default)
     {
         var familyId = Guid.NewGuid().ToString("N");
-        return await CreateTokenPairAsync(user, familyId, ipAddress, cancellationToken);
+        return await CreateTokenPairAsync(
+            user,
+            familyId,
+            ipAddress,
+            cancellationToken);
     }
 
     public async Task<TokenPair?> RotateRefreshTokenAsync(
@@ -36,9 +40,7 @@ public sealed class JwtTokenService(
         var hash = HashRefreshToken(refreshToken);
         var current = await refreshTokens.FindByHashAsync(hash, cancellationToken);
         if (current is null)
-        {
             return null;
-        }
 
         var now = DateTimeOffset.UtcNow;
         if (current.RevokedAtUtc is not null)
@@ -52,15 +54,13 @@ public sealed class JwtTokenService(
         }
 
         if (current.ExpiresAtUtc <= now)
-        {
             return null;
-        }
 
-        var user = await users.FindByIdAsync(current.UserId, cancellationToken);
+        var user = await users.FindByIdAsync(
+            current.UserId,
+            cancellationToken);
         if (user is null)
-        {
             return null;
-        }
 
         var replacementValue = GenerateRefreshToken();
         var replacementHash = HashRefreshToken(replacementValue);
@@ -114,7 +114,12 @@ public sealed class JwtTokenService(
         var now = DateTimeOffset.UtcNow;
         var refreshValue = GenerateRefreshToken();
         await refreshTokens.InsertAsync(
-            NewRefreshToken(user.Id, familyId, refreshValue, ipAddress, now),
+            NewRefreshToken(
+                user.Id,
+                familyId,
+                refreshValue,
+                ipAddress,
+                now),
             cancellationToken);
         return new TokenPair(
             CreateAccessToken(user, now),
@@ -122,28 +127,42 @@ public sealed class JwtTokenService(
             _options.AccessTokenLifetimeMinutes * 60);
     }
 
-    private string CreateAccessToken(ApplicationUser user, DateTimeOffset now)
+    private string CreateAccessToken(
+        ApplicationUser user,
+        DateTimeOffset now)
     {
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Id),
             new(JwtRegisteredClaimNames.Email, user.Email),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
-            new(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new(
+                JwtRegisteredClaimNames.Iat,
+                now.ToUnixTimeSeconds().ToString(),
+                ClaimValueTypes.Integer64)
         };
         if (!string.IsNullOrWhiteSpace(user.DisplayName))
-        {
             claims.Add(new Claim(ClaimTypes.Name, user.DisplayName));
+        foreach (var role in user.Roles
+                     .Where(role => !string.IsNullOrWhiteSpace(role))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            claims.Add(new Claim("role", role));
         }
 
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
+        var key = new SymmetricSecurityKey(
+            Encoding.UTF8.GetBytes(_options.SigningKey));
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,
             audience: _options.Audience,
             claims: claims,
             notBefore: now.UtcDateTime,
-            expires: now.AddMinutes(_options.AccessTokenLifetimeMinutes).UtcDateTime,
-            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
+            expires: now
+                .AddMinutes(_options.AccessTokenLifetimeMinutes)
+                .UtcDateTime,
+            signingCredentials: new SigningCredentials(
+                key,
+                SecurityAlgorithms.HmacSha256));
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
@@ -167,5 +186,6 @@ public sealed class JwtTokenService(
         WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(64));
 
     private static string HashRefreshToken(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 }

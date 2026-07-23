@@ -19,7 +19,9 @@ def test_internal_service_key_must_be_strong_when_configured() -> None:
 def test_production_requires_internal_service_authentication() -> None:
     with pytest.raises(ValidationError, match="required in production"):
         Settings(
+            _env_file=None,
             environment="production",
+            internal_api_key=None,
             connect_external_services_on_startup=False,
         )
 

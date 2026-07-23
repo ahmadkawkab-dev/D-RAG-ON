@@ -1,18 +1,25 @@
-using System.Text;
-using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.OAuth.Claims;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.Extensions.Http.Resilience;
+using Microsoft.OpenApi;
+using RagMiddleware.Api.Middleware;
 using RagMiddleware.Application.Abstractions;
+using RagMiddleware.Infrastructure.Auditing;
 using RagMiddleware.Infrastructure.Authentication;
 using RagMiddleware.Infrastructure.Clients;
 using RagMiddleware.Infrastructure.Configuration;
+using RagMiddleware.Infrastructure.Health;
 using RagMiddleware.Infrastructure.Persistence;
+using System.Text;
+using System.Text.Json;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,12 +43,22 @@ builder.Services.AddOptions<FrontendOptions>()
     .Bind(builder.Configuration.GetSection(FrontendOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
+builder.Services.AddOptions<RateLimitOptions>()
+    .Bind(builder.Configuration.GetSection(RateLimitOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+builder.Services.AddOptions<RequestLimitOptions>()
+    .Bind(builder.Configuration.GetSection(RequestLimitOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
 builder.Services.AddSingleton<MongoContext>();
 builder.Services.AddSingleton<IUserRepository, MongoUserRepository>();
 builder.Services.AddSingleton<IRefreshTokenRepository, MongoRefreshTokenRepository>();
 builder.Services.AddSingleton<ITokenService, JwtTokenService>();
 builder.Services.AddHostedService<MongoIndexInitializer>();
+builder.Services.AddHealthChecks()
+    .AddCheck<MongoHealthCheck>("MongoDB", HealthStatus.Unhealthy, tags: ["startup", "live", "ready"]);
 
 builder.Services
     .AddAuthentication(options =>
@@ -94,6 +111,48 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddRateLimiter(options =>
+{
+    var rateLimitOptions = builder.Configuration
+        .GetSection(RateLimitOptions.SectionName)
+        .Get<RateLimitOptions>() ?? new RateLimitOptions();
+
+    options.AddFixedWindowLimiter("Auth", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = rateLimitOptions.AuthPermitLimit;
+        limiterOptions.Window = TimeSpan.FromSeconds(rateLimitOptions.AuthWindowSeconds);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 0;
+    });
+
+    options.AddFixedWindowLimiter("OAuthCallback", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = rateLimitOptions.OAuthCallbackPermitLimit;
+        limiterOptions.Window = TimeSpan.FromSeconds(60);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 0;
+    });
+
+    options.AddTokenBucketLimiter("Rag", limiterOptions =>
+    {
+        limiterOptions.TokenLimit = rateLimitOptions.RagTokenLimit;
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 0;
+        limiterOptions.ReplenishmentPeriod = TimeSpan.FromSeconds(rateLimitOptions.RagReplenishmentSeconds);
+        limiterOptions.TokensPerPeriod = rateLimitOptions.RagTokensPerPeriod;
+        limiterOptions.AutoReplenishment = true;
+    });
+
+    options.AddFixedWindowLimiter("Admin", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = rateLimitOptions.AdminPermitLimit;
+        limiterOptions.Window = TimeSpan.FromSeconds(rateLimitOptions.AdminWindowSeconds);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 0;
+    });
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 builder.Services.AddHttpClient<IRagApiClient, RagApiClient>((services, client) =>
     {
         var options = services.GetRequiredService<IOptions<RagApiOptions>>().Value;
@@ -130,14 +189,75 @@ builder.Services.AddControllers()
 builder.Services.Configure<ApiBehaviorOptions>(options =>
     options.SuppressMapClientErrors = true);
 
+builder.Services.AddScoped<IAuditLogRepository, MongoAuditLogRepository>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
+builder.Services.AddHttpContextAccessor();
+
+
+// Swagger/OpenAPI
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "RAG Middleware API",
+        Version = "v1",
+        Description = "Authentication, administration and RAG middleware API."
+    });
+
+    options.AddSecurityDefinition("bearer", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        Description = "Enter the JWT access token."
+    });
+
+    options.AddSecurityRequirement(document =>
+        new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecuritySchemeReference("bearer", document)] = []
+        });
+});
+
+
 var app = builder.Build();
 
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint(
+            "/swagger/v1/swagger.json",
+            "RAG Middleware API v1");
+
+        options.DocumentTitle = "RAG Middleware API";
+        options.DisplayRequestDuration();
+    });
+}
+
 app.UseHttpsRedirection();
+app.UseRateLimiter();
+app.UseMiddleware<SecurityHeadersMiddleware>();
+app.UseMiddleware<AuditLoggingMiddleware>();
+app.UseMiddleware<RagConcurrencyMiddleware>();
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = hc => hc.Tags.Contains("live")
+}).AllowAnonymous();
+app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = hc => hc.Tags.Contains("ready")
+}).AllowAnonymous();
+app.MapHealthChecks("/health/startup", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = hc => hc.Tags.Contains("startup")
+}).AllowAnonymous();
 
 app.Run();
 

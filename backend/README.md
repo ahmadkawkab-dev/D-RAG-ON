@@ -1,138 +1,73 @@
-# FastAPI backend
+# Internal FastAPI RAG service
 
-The backend is an HTTP adapter over the existing local RAG pipeline. MongoDB
-stores users, sessions, messages, and structured citations; Weaviate remains the
-retrieval index; Ollama and Transformers remain the local model runtimes.
+The Python API is an internal adapter over the existing local RAG pipeline.
+MongoDB stores chat sessions, messages, feedback, and structured citations;
+Weaviate remains the retrieval index. The .NET middleware owns browser
+authentication, Google OAuth, application users, roles, refresh tokens, and the
+authoritative MongoDB audit trail.
 
 ## Start locally
-
-Run every command in native Ubuntu WSL from the repository root:
 
 ```bash
 cd /home/ahmad/rag_setup/rag_setup
 cp .env.example .env
 uv sync
 docker compose up -d mongodb weaviate
-uv run uvicorn backend.main:app --reload
+uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-The requested compatibility command is also supported:
+The internal OpenAPI UI is at `http://localhost:8000/docs`; process health is at
+`http://localhost:8000/health`. Do not expose the Python listener or its docs to
+the public network.
 
-```bash
-uv run uvicorn app.main:app --reload
-```
+## Internal authentication
 
-The API documentation is available at `http://localhost:8000/docs`; the health
-endpoint is `http://localhost:8000/health`.
-
-Ollama must be running with the configured embedding and answer models before a
-chat request. The configured rerankers are loaded locally through Transformers.
-
-## Authentication
-
-Register with JSON:
+All `/api/v1/*` endpoints require headers supplied by .NET:
 
 ```text
-POST /api/v1/auth/register
-{"email":"person@example.com","password":"long-password","full_name":"Person"}
+X-RAG-API-Key: <shared internal service key>
+X-Application-User-Id: <trusted .NET application user ID>
+X-Correlation-Id: <server trace ID>
 ```
 
-Login uses OAuth2 form fields. Send the email in `username`:
+Set the same secret in Python as `RAG_INTERNAL_API_KEY` and in .NET as
+`RagApi:ApiKey`. It must be at least 32 characters. The browser must never
+receive or submit this key. The user header is trusted only after constant-time
+service-key validation.
 
-```text
-POST /api/v1/auth/login
-Content-Type: application/x-www-form-urlencoded
+## Routes
 
-username=person@example.com&password=long-password
-```
-
-Use the returned access token as `Authorization: Bearer <token>`. Rotate tokens
-with `POST /api/v1/auth/refresh`.
-
-### Password reset email
-
-The login screen supports a six-digit, expiring password-reset code:
-
-- `POST /api/v1/auth/password-reset/request`
-- `POST /api/v1/auth/password-reset/confirm`
-
-Configure delivery with the following `.env` values (all settings use the
-`RAG_` prefix):
-
-```dotenv
-RAG_SMTP_HOST=smtp.example.com
-RAG_SMTP_PORT=587
-RAG_SMTP_FROM_EMAIL=no-reply@example.com
-RAG_SMTP_USERNAME=your-smtp-user
-RAG_SMTP_PASSWORD=your-smtp-password
-RAG_SMTP_STARTTLS=true
-RAG_SMTP_USE_SSL=false
-RAG_PASSWORD_RESET_EXPIRE_MINUTES=10
-RAG_PASSWORD_RESET_MAX_ATTEMPTS=5
-RAG_PASSWORD_RESET_RESEND_SECONDS=60
-```
-
-Use STARTTLS for port 587, or set `RAG_SMTP_USE_SSL=true` and
-`RAG_SMTP_STARTTLS=false` for implicit TLS (commonly port 465). Production
-requires `RAG_SMTP_HOST`. In development only, when SMTP is omitted, the reset
-code is written to the backend log so the flow can be tested locally.
-
-### Account settings
-
-Authenticated account routes are:
-
-- `GET /api/v1/users/me`
-- `PATCH /api/v1/users/me`
-- `POST /api/v1/users/me/password`
-- `GET /api/v1/users/me/usage`
-
-Avatar uploads accept PNG, JPEG, or WebP data URLs up to 512 KB. Password changes
-require the current password. Usage reports conversation, message, assistant
-answer, and submitted-feedback counts.
-
-## Chat stream
-
-`POST /api/v1/chat/stream` accepts:
-
-```json
-{"message": "What does CIS Control 5 require?", "session_id": null}
-```
-
-The `text/event-stream` response emits:
-
-```text
-event: metadata
-data: {"sources":[...]}
-
-event: delta
-data: {"content":"token"}
-
-event: done
-data: {"session_id":"..."}
-```
-
-Metadata contains document ID, title, URL or file path, chunk text, relevance,
-page, and section fields suitable for a frontend source accordion.
-
-## History
-
+- `POST /api/v1/general/stream` — general conversation
+- `POST /api/v1/chat/stream` — document-grounded conversation
+- `POST /api/v1/documents/upload` — bounded PDF ingestion
 - `GET /api/v1/history/sessions`
 - `GET /api/v1/history/sessions/{session_id}`
 - `DELETE /api/v1/history/sessions/{session_id}`
+- `PUT /api/v1/feedback/messages/{message_id}`
 
-All chat and history endpoints require an access token and enforce session
-ownership.
+The general and document routes are deliberately separate. .NET maps
+`/api/rag/general/stream` to `/api/v1/general/stream` and
+`/api/rag/document/stream` to `/api/v1/chat/stream`.
 
-## Tests
+The upload endpoint accepts one `application/pdf` file up to 10 MiB, verifies
+the `.pdf` extension and `%PDF-` signature, writes only to a temporary
+server-generated path, and reuses `PDFChunkingPipeline`, `Embedder`,
+`get_or_create_collection`, and `upload_chunks`. It does not create a MongoDB
+collection or retain the client filename.
 
-The default suite skips service-backed model tests:
+## Logging and tests
+
+Python logs operational model, retrieval, indexing, and service-authentication
+failures. .NET alone creates application audit records. Never log service keys,
+document contents, prompts, generated answers, or raw exception responses.
 
 ```bash
 uv run pytest -q
+uv run python -m compileall -q backend
 ```
 
-Run the repeatable live MongoDB, Weaviate, Ollama, SSE, citation, and history
-checks only after local services and models are ready:
+Run live service tests only after MongoDB, Weaviate, Ollama, models, and the
+internal key are ready:
 
 ```bash
 RUN_LIVE_RAG_TESTS=1 uv run pytest -q tests/backend/test_live_integration.py

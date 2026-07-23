@@ -34,6 +34,34 @@ public sealed class MongoIndexInitializer(MongoContext context) : IHostedService
                 new CreateIndexOptions { ExpireAfter = TimeSpan.Zero, Name = "refresh_tokens_expiry" })
         };
         await context.RefreshTokens.Indexes.CreateManyAsync(tokenIndexes, cancellationToken);
+
+        var auditIndexes = new[]
+        {
+            new CreateIndexModel<AuditLog>(
+                Builders<AuditLog>.IndexKeys.Descending(x => x.TimestampUtc),
+                new CreateIndexOptions { Name = "audit_logs_timestamp_desc" }),
+            new CreateIndexModel<AuditLog>(
+                Builders<AuditLog>.IndexKeys
+                    .Ascending(x => x.UserId)
+                    .Descending(x => x.TimestampUtc),
+                new CreateIndexOptions { Name = "audit_logs_user_timestamp" }),
+            new CreateIndexModel<AuditLog>(
+                Builders<AuditLog>.IndexKeys
+                    .Ascending(x => x.Action)
+                    .Descending(x => x.TimestampUtc),
+                new CreateIndexOptions { Name = "audit_logs_action_timestamp" }),
+            new CreateIndexModel<AuditLog>(
+                Builders<AuditLog>.IndexKeys
+                    .Ascending(x => x.StatusCode)
+                    .Descending(x => x.TimestampUtc),
+                new CreateIndexOptions { Name = "audit_logs_status_timestamp" }),
+            new CreateIndexModel<AuditLog>(
+                Builders<AuditLog>.IndexKeys
+                    .Ascending(x => x.Succeeded)
+                    .Descending(x => x.TimestampUtc),
+                new CreateIndexOptions { Name = "audit_logs_success_timestamp" })
+        };
+        await context.AuditLogs.Indexes.CreateManyAsync(auditIndexes, cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

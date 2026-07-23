@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using RagMiddleware.Application.Abstractions;
 using RagMiddleware.Application.Contracts;
@@ -10,13 +12,15 @@ namespace RagMiddleware.Infrastructure.Clients;
 
 public sealed class RagApiClient(
     HttpClient httpClient,
-    IOptions<RagApiOptions> options) : IRagApiClient
+    IOptions<RagApiOptions> options,
+    IHttpContextAccessor httpContextAccessor) : IRagApiClient
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web)
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
 
     private readonly RagApiOptions _options = options.Value;
 
@@ -45,16 +49,24 @@ public sealed class RagApiClient(
                 throw new RagServiceException(statusCode);
             }
 
-            var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var stream = await response.Content.ReadAsStreamAsync(
+                cancellationToken);
             return new RagStreamResponse(response, stream);
         }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested)
         {
-            throw new RagServiceException((int)HttpStatusCode.GatewayTimeout, true, exception);
+            throw new RagServiceException(
+                (int)HttpStatusCode.GatewayTimeout,
+                true,
+                exception);
         }
         catch (HttpRequestException exception)
         {
-            throw new RagServiceException((int)HttpStatusCode.ServiceUnavailable, false, exception);
+            throw new RagServiceException(
+                (int)HttpStatusCode.ServiceUnavailable,
+                false,
+                exception);
         }
     }
 
@@ -65,9 +77,7 @@ public sealed class RagApiClient(
     {
         var path = "api/v1/history/sessions";
         if (!string.IsNullOrWhiteSpace(mode))
-        {
             path += $"?mode={Uri.EscapeDataString(mode)}";
-        }
         return SendAsync<IReadOnlyList<ChatSessionResponse>>(
             HttpMethod.Get,
             path,
@@ -110,6 +120,60 @@ public sealed class RagApiClient(
             request,
             cancellationToken);
 
+    public async Task<DocumentUploadResponse> UploadDocumentAsync(
+        Stream stream,
+        long sizeBytes,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        using var message = CreateRequest(
+            HttpMethod.Post,
+            "api/v1/documents/upload",
+            userId);
+        using var multipart = new MultipartFormDataContent();
+        using var content = new StreamContent(stream);
+        content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf");
+        content.Headers.ContentLength = sizeBytes;
+        multipart.Add(content, "file", "upload.pdf");
+        message.Content = multipart;
+        try
+        {
+            using var response = await httpClient.SendAsync(
+                message,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                throw new RagServiceException((int)response.StatusCode);
+            var result = await response.Content.ReadFromJsonAsync<DocumentUploadResponse>(
+                JsonOptions,
+                cancellationToken);
+            return result
+                ?? throw new RagServiceException((int)HttpStatusCode.BadGateway);
+        }
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new RagServiceException(
+                (int)HttpStatusCode.GatewayTimeout,
+                true,
+                exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new RagServiceException(
+                (int)HttpStatusCode.ServiceUnavailable,
+                false,
+                exception);
+        }
+        catch (JsonException exception)
+        {
+            throw new RagServiceException(
+                (int)HttpStatusCode.BadGateway,
+                false,
+                exception);
+        }
+    }
+
     private async Task<T> SendAsync<T>(
         HttpMethod method,
         string path,
@@ -119,39 +183,62 @@ public sealed class RagApiClient(
     {
         using var message = CreateRequest(method, path, userId);
         if (body is not null)
-        {
             message.Content = JsonContent.Create(body, options: JsonOptions);
-        }
 
         try
         {
-            using var response = await httpClient.SendAsync(message, cancellationToken);
+            using var response = await httpClient.SendAsync(
+                message,
+                cancellationToken);
             if (!response.IsSuccessStatusCode)
-            {
                 throw new RagServiceException((int)response.StatusCode);
-            }
-            var result = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
-            return result ?? throw new RagServiceException((int)HttpStatusCode.BadGateway);
+            var result = await response.Content.ReadFromJsonAsync<T>(
+                JsonOptions,
+                cancellationToken);
+            return result
+                ?? throw new RagServiceException(
+                    (int)HttpStatusCode.BadGateway);
         }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested)
         {
-            throw new RagServiceException((int)HttpStatusCode.GatewayTimeout, true, exception);
+            throw new RagServiceException(
+                (int)HttpStatusCode.GatewayTimeout,
+                true,
+                exception);
         }
         catch (HttpRequestException exception)
         {
-            throw new RagServiceException((int)HttpStatusCode.ServiceUnavailable, false, exception);
+            throw new RagServiceException(
+                (int)HttpStatusCode.ServiceUnavailable,
+                false,
+                exception);
         }
         catch (JsonException exception)
         {
-            throw new RagServiceException((int)HttpStatusCode.BadGateway, false, exception);
+            throw new RagServiceException(
+                (int)HttpStatusCode.BadGateway,
+                false,
+                exception);
         }
     }
 
-    private HttpRequestMessage CreateRequest(HttpMethod method, string path, string userId)
+    private HttpRequestMessage CreateRequest(
+        HttpMethod method,
+        string path,
+        string userId)
     {
         var request = new HttpRequestMessage(method, path);
         request.Headers.Add("X-RAG-API-Key", _options.ApiKey);
         request.Headers.Add("X-Application-User-Id", userId);
+        var traceId = Activity.Current?.TraceId.ToString()
+            ?? httpContextAccessor.HttpContext?.TraceIdentifier;
+        if (!string.IsNullOrWhiteSpace(traceId))
+        {
+            request.Headers.TryAddWithoutValidation(
+                "X-Correlation-Id",
+                traceId.Length <= 128 ? traceId : traceId[..128]);
+        }
         return request;
     }
 }

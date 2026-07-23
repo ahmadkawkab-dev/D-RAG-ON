@@ -8,6 +8,7 @@ public sealed class ApplicationUser
     public required string NormalizedEmail { get; set; }
     public string? DisplayName { get; set; }
     public string? AvatarUrl { get; set; }
+    public IReadOnlyList<string> Roles { get; set; } = [];
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastLoginAtUtc { get; set; }
 }
