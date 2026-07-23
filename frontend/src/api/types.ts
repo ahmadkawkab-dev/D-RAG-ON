@@ -1,4 +1,5 @@
 export type ChatMode = 'document' | 'general'
+export type AnswerId = 'answer_a' | 'answer_b'
 
 export type Citation = {
   document_id: string
@@ -86,11 +87,70 @@ export type StreamStarted = {
 export type StreamDone = Pick<
   StreamStarted,
   'sessionId' | 'replyToMessageId' | 'version'
-> & { messageId: string }
+> & {
+  messageId: string | null
+  requiresSelection: boolean
+}
 
 export type StreamCallbacks = {
   onStarted: (event: StreamStarted) => void
   onMetadata: (sources: Citation[]) => void
   onDelta: (content: string) => void
   onDone: (event: StreamDone) => void
+  onGenerationStarted?: (event: DualGenerationStarted) => void
+  onAnswerStarted?: (event: DualAnswerStarted) => void
+  onAnswerDelta?: (event: DualAnswerDelta) => void
+  onAnswerDone?: (event: DualAnswerCompleted) => void
+  onAnswerError?: (event: DualAnswerFailed) => void
+  onGenerationDone?: (event: DualGenerationCompleted) => void
 }
+
+
+export type DualAnswerCandidate = {
+  id: AnswerId
+  label: string
+  content: string
+  completed: boolean
+  error?: string
+}
+
+export type DualAnswerGeneration = {
+  generationId: string
+  answers: DualAnswerCandidate[]
+  sources: Citation[]
+  selectedAnswerId: AnswerId | null
+  completed: boolean
+}
+
+export type DualGenerationStarted = {
+  generationId: string
+  answerCount: number
+  sources: Citation[]
+}
+
+export type DualAnswerStarted = {
+  generationId: string
+  answerId: AnswerId
+  label: string
+}
+
+export type DualAnswerDelta = DualAnswerStarted & {
+  content: string
+}
+
+export type DualAnswerCompleted = {
+  generationId: string
+  answerId: AnswerId
+}
+
+export type DualAnswerFailed = DualAnswerCompleted & {
+  label: string
+  error: string
+}
+
+export type DualGenerationCompleted = {
+  generationId: string
+  availableAnswerIds: AnswerId[]
+}
+
+export type GeneralAnswerSelectionResponse = ChatMessage

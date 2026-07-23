@@ -31,15 +31,27 @@ import {
   restoreSession,
   logout,
   listSessions,
+  selectGeneralAnswer,
   streamChat,
 } from './api/client'
-import type { AuthSession, ChatMessage, ChatMode, ChatSession, Feedback } from './api/types'
+import type {
+  AnswerId,
+  AuthSession,
+  ChatMessage,
+  ChatMode,
+  ChatSession,
+  DualAnswerCandidate,
+  DualAnswerGeneration,
+  Feedback,
+} from './api/types'
 import { AuthPanel } from './components/AuthPanel'
 import { BubbleBackground } from './components/animate-ui/components/backgrounds/bubble'
 import { ConversationExportMenu } from './components/ConversationExportMenu'
+import { DualAnswerRenderer } from './DualAnswerRenderer'
 import { FeedbackControls } from './components/FeedbackControls'
 import { HighlightedResponseRenderer as ResponseRenderer } from './components/HighlightedResponseRenderer'
 import { ModeToggle } from './components/mode-toggle'
+import { OnboardingGuide } from './components/OnboardingGuide'
 import { PixelBot } from './components/PixelBot'
 import { ProfileSettings } from './components/ProfileSettings'
 import { Alert, AlertDescription } from './components/ui/alert'
@@ -180,6 +192,7 @@ type ChatSidebarProps = {
   onNewChat: () => void
   onOpenSession: (sessionId: string) => void
   onAuthChange: (auth: AuthSession) => void
+  onOpenGuide: () => void
   onSignOut: () => void
 }
 
@@ -198,6 +211,7 @@ function ChatSidebar({
   onNewChat,
   onOpenSession,
   onAuthChange,
+  onOpenGuide,
   onSignOut,
 }: ChatSidebarProps) {
   const { setOpenMobile } = useSidebar()
@@ -311,7 +325,11 @@ function ChatSidebar({
       <SidebarFooter className="border-t p-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton type="button" tooltip="Help center">
+            <SidebarMenuButton
+              type="button"
+              tooltip="Help center"
+              onClick={() => closeAfter(onOpenGuide)}
+            >
               <CircleHelp aria-hidden="true" />
               <span>Help center</span>
             </SidebarMenuButton>
@@ -368,6 +386,8 @@ function ConnectedApp() {
   const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({})
   const [hasNewContent, setHasNewContent] = useState(false)
   const [bubblePulse, setBubblePulse] = useState(0)
+  const [dualAnswers, setDualAnswers] = useState<Record<string, DualAnswerGeneration>>({})
+  const [guideOpen, setGuideOpen] = useState(false)
   const stageRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
   const endRef = useRef<HTMLDivElement>(null)
@@ -375,6 +395,12 @@ function ConnectedApp() {
   const activeIdRef = useRef<string | null>(null)
   const backgroundMessages = useRef(new Map<string, UiMessage[]>())
   const currentMode = modeDefinition(mode)
+  const onboardingStorageKey = auth
+    ? `pixel-mind:onboarding:v1:${auth.email}`
+    : 'pixel-mind:onboarding:v1'
+  const hasPendingChoice = Object.values(dualAnswers).some(
+    (generation) => generation.selectedAnswerId === null,
+  )
 
   const latestVersionByReply = new Map<string, number>()
   for (const message of messages) {
@@ -409,6 +435,14 @@ function ConnectedApp() {
       .finally(() => { if (!cancelled) setAuthLoading(false) })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!auth) return
+
+    if (window.localStorage.getItem(onboardingStorageKey) !== 'completed') {
+      setGuideOpen(true)
+    }
+  }, [auth, onboardingStorageKey])
 
   useEffect(() => {
     if (!auth) return
@@ -495,6 +529,7 @@ function ConnectedApp() {
     setActiveId(null)
     activeIdRef.current = null
     setMessages([])
+    setDualAnswers({})
     setInput('')
     setError('')
     setHistoryLoading(true)
@@ -503,6 +538,7 @@ function ConnectedApp() {
   const startNewChat = () => {
     setActiveId(null)
     setMessages([])
+    setDualAnswers({})
     activeIdRef.current = null
     setInput('')
     setError('')
@@ -511,6 +547,7 @@ function ConnectedApp() {
   const openSession = async (sessionId: string) => {
     if (sessionId === activeId) return
     setError('')
+    setDualAnswers({})
     setHistoryLoading(true)
     const buffered = backgroundMessages.current.get(sessionId)
     if (buffered) {
@@ -538,6 +575,7 @@ function ConnectedApp() {
       await deleteSession(activeId)
       setActiveId(null)
       setMessages([])
+      setDualAnswers({})
       await refreshSessionList()
     } catch (caught) {
       handleApiError(caught)
@@ -551,13 +589,105 @@ function ConnectedApp() {
     setSessions([])
     backgroundMessages.current.clear()
     setMessages([])
+    setDualAnswers({})
     setActiveId(null)
     activeIdRef.current = null
   }
 
+  const selectDualAnswer = async (
+    placeholderMessageId: string,
+    generationId: string,
+    answerId: AnswerId,
+  ): Promise<void> => {
+    const generation = dualAnswers[placeholderMessageId]
+    const placeholderMessage = messages.find(
+      (message) => message.id === placeholderMessageId,
+    )
+
+    if (!generation || generation.selectedAnswerId) return
+
+    const sessionId = placeholderMessage?.session_id || activeId
+    const replyToMessageId = placeholderMessage?.reply_to_message_id
+
+    if (!sessionId || !replyToMessageId) {
+      throw new ApiError(
+        'The pending answer is missing its session or user-message identifier.',
+      )
+    }
+
+    setDualAnswers((current) => {
+      const existing = current[placeholderMessageId]
+      if (!existing) return current
+
+      return {
+        ...current,
+        [placeholderMessageId]: {
+          ...existing,
+          selectedAnswerId: answerId,
+        },
+      }
+    })
+
+    try {
+      const selected = await selectGeneralAnswer(
+        sessionId,
+        replyToMessageId,
+        generationId,
+        answerId,
+      )
+
+      setMessages((current) => current.map((message) =>
+        message.id === placeholderMessageId
+          ? {
+              ...message,
+              id: selected.id,
+              session_id: selected.session_id,
+              content: selected.content,
+              sources: selected.sources,
+              timestamp: selected.timestamp,
+              reply_to_message_id: selected.reply_to_message_id,
+              version: selected.version,
+              feedback: selected.feedback,
+              pending: false,
+            }
+          : message))
+
+      setDualAnswers((current) => {
+        const next = { ...current }
+        delete next[placeholderMessageId]
+        return next
+      })
+
+      const [detail, updatedSessions] = await Promise.all([
+        getSession(selected.session_id),
+        listSessions('general'),
+      ])
+
+      backgroundMessages.current.delete(selected.session_id)
+      if (activeIdRef.current === selected.session_id) {
+        setMessages(detail.messages)
+      }
+      setSessions(updatedSessions)
+      toast.success('Answer selected')
+    } catch (caught) {
+      setDualAnswers((current) => {
+        const existing = current[placeholderMessageId]
+        if (!existing) return current
+        return {
+          ...current,
+          [placeholderMessageId]: {
+            ...existing,
+            selectedAnswerId: null,
+          },
+        }
+      })
+      throw caught
+    }
+  }
+
   const sendMessage = async (rawInput = input, regenerateMessageId?: string) => {
     const content = rawInput.trim()
-    if (!content || isThinking) return
+    if (!content || isThinking || hasPendingChoice) return
 
     const originSessionId = activeId
     let taskSessionId = activeId
@@ -593,6 +723,48 @@ function ConnectedApp() {
     const controller = new AbortController()
     streamController.current = controller
     let completedSessionId: string | null = null
+    let dualGenerationSeen = false
+
+    const updateDualCandidate = (
+      generationId: string,
+      answerId: AnswerId,
+      update: (
+        candidate: DualAnswerCandidate,
+      ) => DualAnswerCandidate,
+      label: string = answerId,
+    ): void => {
+      setDualAnswers((current) => {
+        const existing: DualAnswerGeneration =
+          current[assistantMessage.id] ?? {
+            generationId,
+            answers: [],
+            sources: [],
+            selectedAnswerId: null,
+            completed: false,
+          }
+
+        const candidate: DualAnswerCandidate =
+          existing.answers.find(
+            (answer) => answer.id === answerId,
+          ) ?? {
+            id: answerId,
+            label,
+            content: '',
+            completed: false,
+          }
+        const answers = existing.answers.some((answer) => answer.id === answerId)
+          ? existing.answers.map((answer) => answer.id === answerId ? update(answer) : answer)
+          : [...existing.answers, update(candidate)]
+        return {
+          ...current,
+          [assistantMessage.id]: {
+            ...existing,
+            generationId,
+            answers,
+          },
+        }
+      })
+    }
 
     try {
       await streamChat(taskMode, content, activeId, {
@@ -630,6 +802,86 @@ function ConnectedApp() {
           message.id === assistantMessage.id ? { ...message, sources } : message)),
         onDelta: (delta) => updateTaskMessages((current) => current.map((message) =>
           message.id === assistantMessage.id ? { ...message, content: message.content + delta } : message)),
+        onGenerationStarted: (event) => {
+          if (event.answerCount <= 1) return
+
+          dualGenerationSeen = true
+          setDualAnswers((current) => ({
+            ...current,
+            [assistantMessage.id]: {
+              generationId: event.generationId,
+              answers: [],
+              sources: event.sources,
+              selectedAnswerId: null,
+              completed: false,
+            },
+          }))
+          if (event.sources.length) {
+            updateTaskMessages((current) => current.map((message) =>
+              message.id === assistantMessage.id
+                ? { ...message, sources: event.sources }
+                : message))
+          }
+        },
+        onAnswerStarted: (event) => {
+          updateDualCandidate(
+            event.generationId,
+            event.answerId,
+            (candidate) => ({ ...candidate, label: event.label }),
+            event.label,
+          )
+        },
+        onAnswerDelta: (event) => {
+          updateDualCandidate(
+            event.generationId,
+            event.answerId,
+            (candidate) => ({
+              ...candidate,
+              label: event.label,
+              content: candidate.content + event.content,
+            }),
+            event.label,
+          )
+        },
+        onAnswerDone: (event) => {
+          updateDualCandidate(
+            event.generationId,
+            event.answerId,
+            (candidate) => ({ ...candidate, completed: true }),
+          )
+        },
+        onAnswerError: (event) => {
+          updateDualCandidate(
+            event.generationId,
+            event.answerId,
+            (candidate) => ({
+              ...candidate,
+              label: event.label,
+              completed: true,
+              error: event.error,
+            }),
+            event.label,
+          )
+        },
+        onGenerationDone: (event) => {
+          dualGenerationSeen = true
+          setDualAnswers((current) => {
+            const existing = current[assistantMessage.id]
+            if (!existing) return current
+            return {
+              ...current,
+              [assistantMessage.id]: {
+                ...existing,
+                generationId: event.generationId,
+                completed: true,
+              },
+            }
+          })
+          updateTaskMessages((current) => current.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, pending: false }
+              : message))
+        },
         onDone: (event) => {
           completedSessionId = event.sessionId
           if (event.replyToMessageId) {
@@ -637,6 +889,13 @@ function ConnectedApp() {
           }
         },
       }, { regenerateMessageId, signal: controller.signal })
+
+      if (dualGenerationSeen) {
+        toast.info('Choose an answer', {
+          description: 'Select one response to continue this conversation.',
+        })
+        return
+      }
 
       if (!completedSessionId) throw new ApiError('The API did not return a session identifier')
       const [detail, updatedSessions] = await Promise.all([
@@ -710,6 +969,7 @@ function ConnectedApp() {
           onNewChat={startNewChat}
           onOpenSession={(sessionId) => void openSession(sessionId)}
           onAuthChange={setAuth}
+          onOpenGuide={() => setGuideOpen(true)}
           onSignOut={signOut}
         />
 
@@ -859,13 +1119,16 @@ function ConnectedApp() {
                   )}
                   {visibleMessages.map((message) => {
                     const versions = versionsFor(message)
+                    const dualGeneration = dualAnswers[message.id]
                     return (
                       <article
                         key={message.id}
                         aria-busy={Boolean(message.pending)}
                         className={message.role === 'user'
                           ? 'ml-auto flex max-w-3xl flex-row-reverse gap-3'
-                          : 'flex max-w-3xl gap-3'}
+                          : dualGeneration
+                            ? 'flex max-w-4xl gap-3'
+                            : 'flex max-w-3xl gap-3'}
                       >
                         <Avatar className="mt-0.5 size-8 border shadow-sm">
                           {message.role === 'user' && auth.avatarUrl && <AvatarImage src={auth.avatarUrl} alt="" />}
@@ -887,7 +1150,25 @@ function ConnectedApp() {
                           <div className={message.role === 'user'
                             ? 'inline-block rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-left text-sm leading-6 text-primary-foreground shadow-sm'
                             : 'rounded-2xl rounded-tl-sm border bg-card p-4 text-left shadow-sm sm:p-5'}>
-                            {message.content ? (
+                            {message.role === 'assistant' && dualGeneration ? (
+                              <DualAnswerRenderer
+                                generationId={dualGeneration.generationId}
+                                answers={dualGeneration.answers}
+                                sources={dualGeneration.sources.length
+                                  ? dualGeneration.sources
+                                  : message.sources}
+                                selectedAnswerId={dualGeneration.selectedAnswerId}
+                                onSelect={(
+                                  generationId: string,
+                                  answerId: AnswerId,
+                                ) =>
+                                  selectDualAnswer(
+                                    message.id,
+                                    generationId,
+                                    answerId,
+                                  )}
+                              />
+                            ) : message.content ? (
                               message.role === 'assistant' ? (
                                 <ResponseRenderer content={message.content} sources={message.sources} />
                               ) : (
@@ -901,13 +1182,13 @@ function ConnectedApp() {
                               </div>
                             ) : null}
                           </div>
-                          {message.role === 'assistant' && message.content && !message.pending ? (
+                          {message.role === 'assistant' && message.content && !message.pending && !dualGeneration ? (
                             <FeedbackControls
                               message={message}
                               onSaved={(feedback) => handleFeedback(message.id, feedback)}
                             />
                           ) : null}
-                          {message.role === 'assistant' && message.reply_to_message_id && !message.pending ? (
+                          {message.role === 'assistant' && message.reply_to_message_id && !message.pending && !dualGeneration ? (
                             <div className="mt-3 flex flex-wrap items-center gap-1">
                               <Button
                                 type="button"
@@ -988,16 +1269,18 @@ function ConnectedApp() {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={currentMode.placeholder}
+                placeholder={hasPendingChoice
+                  ? 'Choose one of the answers above to continue'
+                  : currentMode.placeholder}
                 aria-label="Message"
                 rows={1}
-                disabled={isThinking}
+                disabled={isThinking || hasPendingChoice}
                 className="max-h-40 min-h-10 resize-none border-0 bg-transparent px-2 py-2.5 shadow-none focus-visible:ring-0"
               />
               <Button
                 type="submit"
                 size="icon"
-                disabled={!input.trim() || isThinking}
+                disabled={!input.trim() || isThinking || hasPendingChoice}
                 aria-label="Send message"
                 className="shrink-0 rounded-xl"
               >
@@ -1005,11 +1288,19 @@ function ConnectedApp() {
               </Button>
             </form>
             <p className="mx-auto mt-2 max-w-4xl text-center text-[11px] text-muted-foreground">
-              Enter to send. Shift + Enter for a new line.
+              {hasPendingChoice
+                ? 'Choose one answer above before sending the next message.'
+                : 'Enter to send. Shift + Enter for a new line.'}
             </p>
           </div>
         </SidebarInset>
       </div>
+
+      <OnboardingGuide
+        open={guideOpen}
+        storageKey={onboardingStorageKey}
+        onOpenChange={setGuideOpen}
+      />
     </SidebarProvider>
   )
 }
