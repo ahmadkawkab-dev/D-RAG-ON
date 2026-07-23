@@ -27,6 +27,16 @@ public sealed record RagChatRequest(
     }
 }
 
+public sealed record GeneralAnswerSelectionRequest(
+    [Required, RegularExpression(RagValidation.IdentifierPattern)]
+    string SessionId,
+    [Required, RegularExpression(RagValidation.IdentifierPattern)]
+    string ReplyToMessageId,
+    [Required, RegularExpression(RagValidation.IdentifierPattern)]
+    string GenerationId,
+    [Required, RegularExpression("^answer_[ab]$")]
+    string AnswerId);
+
 public sealed record FeedbackRequest(
     [Required, RegularExpression("^(up|down)$")]
     string Direction,

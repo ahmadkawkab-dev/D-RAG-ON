@@ -28,6 +28,27 @@ public sealed class RagController(IRagApiClient ragApiClient) : ControllerBase
         CancellationToken cancellationToken) =>
         Stream("general", request, cancellationToken);
 
+    [HttpPost("general/answers/select")]
+    public async Task<IActionResult> SelectGeneralAnswer(
+        GeneralAnswerSelectionRequest request,
+        CancellationToken cancellationToken)
+    {
+        HttpContext.Items[AuditLoggingMiddleware.SummaryItem] =
+            $"General answer selected; answerId={request.AnswerId}";
+
+        try
+        {
+            return Ok(await ragApiClient.SelectGeneralAnswerAsync(
+                request,
+                UserId(),
+                cancellationToken));
+        }
+        catch (RagServiceException exception)
+        {
+            return RagFailure(exception);
+        }
+    }
+
     [HttpGet("history/sessions")]
     public async Task<IActionResult> ListSessions(
         [FromQuery, RegularExpression("^(general|document)$")] string? mode,
@@ -215,7 +236,20 @@ public sealed class RagController(IRagApiClient ragApiClient) : ControllerBase
             Response.ContentType = "text/event-stream";
             Response.Headers.CacheControl = "no-cache, no-transform";
             Response.Headers.Append("X-Accel-Buffering", "no");
-            await response.Stream.CopyToAsync(Response.Body, cancellationToken);
+            var buffer = new byte[8192];
+            while (true)
+            {
+                var bytesRead = await response.Stream.ReadAsync(
+                    buffer,
+                    cancellationToken);
+                if (bytesRead == 0)
+                    break;
+
+                await Response.Body.WriteAsync(
+                    buffer.AsMemory(0, bytesRead),
+                    cancellationToken);
+                await Response.Body.FlushAsync(cancellationToken);
+            }
         }
         catch (RagServiceException exception) when (!Response.HasStarted)
         {

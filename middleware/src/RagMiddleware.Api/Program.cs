@@ -11,6 +11,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using RagMiddleware.Api.Middleware;
 using RagMiddleware.Application.Abstractions;
+using RagMiddleware.Application.Contracts;
 using RagMiddleware.Infrastructure.Auditing;
 using RagMiddleware.Infrastructure.Authentication;
 using RagMiddleware.Infrastructure.Clients;
@@ -152,6 +153,39 @@ builder.Services.AddRateLimiter(options =>
     });
 
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (rejected, cancellationToken) =>
+    {
+        var retryAfter = rejected.Lease.TryGetMetadata(
+            MetadataName.RetryAfter,
+            out var retry)
+            ? Math.Max(1, (int)Math.Ceiling(retry.TotalSeconds))
+            : 1;
+        var response = rejected.HttpContext.Response;
+        response.StatusCode = StatusCodes.Status429TooManyRequests;
+        response.ContentType = "application/problem+json";
+        response.Headers.RetryAfter = retryAfter.ToString();
+        await response.WriteAsJsonAsync(new
+        {
+            type = "about:blank",
+            title = "Too many requests.",
+            status = StatusCodes.Status429TooManyRequests,
+            code = "rate_limited",
+            trace_id = rejected.HttpContext.TraceIdentifier
+        }, cancellationToken);
+    };
+});
+builder.Services.AddHttpsRedirection(options =>
+{
+    options.HttpsPort = builder.Configuration
+        .GetValue<int?>("HttpsRedirection:HttpsPort") ?? 443;
+    options.RedirectStatusCode = StatusCodes.Status307TemporaryRedirect;
+});
+builder.Services.AddHsts(options =>
+{
+    options.MaxAge = TimeSpan.FromDays(30);
+    options.IncludeSubDomains = false;
+    options.Preload = false;
+    options.ExcludedHosts.Clear();
 });
 builder.Services.AddHttpClient<IRagApiClient, RagApiClient>((services, client) =>
     {
@@ -222,6 +256,31 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+        var payload = new RagErrorResponse(
+            "internal_error",
+            "An unexpected error occurred.",
+            context.TraceIdentifier);
+        var json = JsonSerializer.Serialize(
+            payload,
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+            });
+        await context.Response.WriteAsync(json);
+    });
+});
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -238,14 +297,17 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseRateLimiter();
 app.UseMiddleware<SecurityHeadersMiddleware>();
-app.UseMiddleware<AuditLoggingMiddleware>();
-app.UseMiddleware<RagConcurrencyMiddleware>();
+app.UseRouting();
 app.UseCors("Frontend");
+app.UseMiddleware<AuditLoggingMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+app.UseMiddleware<RagConcurrencyMiddleware>();
 app.MapControllers();
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }))
+    .AllowAnonymous();
 app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = hc => hc.Tags.Contains("live")

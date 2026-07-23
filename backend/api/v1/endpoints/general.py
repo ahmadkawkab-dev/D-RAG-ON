@@ -14,7 +14,7 @@ from backend.api.deps import (
     get_internal_user_id,
     get_general_chat_service,
 )
-from backend.schemas.chat import ChatRequest
+from backend.schemas.chat import AnswerSelectionRequest, ChatMessageResponse, ChatRequest, Citation
 from backend.services.chat_service import ChatService, SessionNotFoundError
 from backend.services.general_chat_service import GeneralChatService
 from backend.services.sse import encode_sse
@@ -87,6 +87,7 @@ async def stream_general_chat(
     async def produce() -> None:
         assistant_parts: list[str] = []
         sources: list[dict[str, Any]] = []
+        requires_selection = False
         try:
             await queue.put(
                 encode_sse(
@@ -106,12 +107,59 @@ async def stream_general_chat(
                     history,
                 )
                 sources = prepared.sources
-                await queue.put(encode_sse("metadata", {"sources": sources}))
-                async for token in general_service.stream(prepared):
-                    assistant_parts.append(token)
-                    await queue.put(
-                        encode_sse("delta", {"content": token})
+                await queue.put(
+                    encode_sse(
+                        "metadata",
+                        {
+                            "sources": sources,
+                            "generation_id": prepared.generation_id,
+                            "answer_count": prepared.answer_count,
+                        },
                     )
+                )
+                async for event in general_service.stream_candidates(prepared):
+                    event_payload = {
+                        **event,
+                        "session_id": session.id,
+                        "reply_to_message_id": prompt_message.id,
+                        "version": version,
+                    }
+                    event_type = str(event["type"])
+                    if event_type == "token":
+                        if prepared.answer_count == 1:
+                            assistant_parts.append(str(event["content"]))
+                            await queue.put(
+                                encode_sse("delta", {"content": event["content"]})
+                            )
+                        else:
+                            await queue.put(
+                                encode_sse("candidate_delta", event_payload)
+                            )
+                    elif event_type in {
+                        "generation_start",
+                        "answer_start",
+                        "answer_done",
+                        "answer_error",
+                        "generation_done",
+                    }:
+                        await queue.put(encode_sse(event_type, event_payload))
+                        if event_type == "generation_done" and prepared.answer_count > 1:
+                            requires_selection = bool(event.get("available_answer_ids"))
+
+            if requires_selection:
+                await queue.put(
+                    encode_sse(
+                        "done",
+                        {
+                            "session_id": session.id,
+                            "message_id": None,
+                            "reply_to_message_id": prompt_message.id,
+                            "version": version,
+                            "requires_selection": True,
+                        },
+                    )
+                )
+                return
 
             assistant = await chat_service.append_message(
                 session_id=session.id,
@@ -170,4 +218,56 @@ async def stream_general_chat(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+@router.post("/answers/select", response_model=ChatMessageResponse)
+async def select_general_answer(
+    payload: AnswerSelectionRequest,
+    user_id: str = Depends(get_internal_user_id),
+    chat_service: ChatService = Depends(get_chat_service),
+    general_service: GeneralChatService = Depends(get_general_chat_service),
+) -> ChatMessageResponse:
+    try:
+        prompt_message = await chat_service.get_message(
+            user_id=user_id,
+            session_id=payload.session_id,
+            message_id=payload.reply_to_message_id,
+        )
+        if prompt_message.role != "user":
+            raise SessionNotFoundError(payload.reply_to_message_id)
+        selected = general_service.get_selected_answer(
+            generation_id=payload.generation_id,
+            answer_id=payload.answer_id,
+        )
+        version = await chat_service.next_version(
+            session_id=payload.session_id,
+            reply_to_message_id=payload.reply_to_message_id,
+        )
+        assistant = await chat_service.append_message(
+            session_id=payload.session_id,
+            role="assistant",
+            content=selected["content"],
+            sources=selected["sources"],
+            reply_to_message_id=payload.reply_to_message_id,
+            version=version,
+        )
+    except (KeyError, SessionNotFoundError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generated answer selection was not found",
+        ) from exc
+
+    return ChatMessageResponse(
+        id=assistant.id,
+        session_id=assistant.session_id,
+        role="assistant",
+        content=assistant.content,
+        sources=[
+            Citation.model_validate(source.model_dump())
+            for source in assistant.sources
+        ],
+        timestamp=assistant.timestamp,
+        reply_to_message_id=assistant.reply_to_message_id,
+        version=assistant.version,
+        feedback=None,
     )

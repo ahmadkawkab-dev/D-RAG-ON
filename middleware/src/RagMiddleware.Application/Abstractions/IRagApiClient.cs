@@ -10,6 +10,11 @@ public interface IRagApiClient
         string userId,
         CancellationToken cancellationToken);
 
+    Task<ChatMessageResponse> SelectGeneralAnswerAsync(
+        GeneralAnswerSelectionRequest request,
+        string userId,
+        CancellationToken cancellationToken);
+
     Task<IReadOnlyList<ChatSessionResponse>> ListSessionsAsync(
         string? mode,
         string userId,

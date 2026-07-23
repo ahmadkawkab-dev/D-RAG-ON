@@ -17,12 +17,14 @@ The browser cannot set either internal header. The .NET access token is never fo
 | --- | --- | --- | --- | --- |
 | Document chat | `POST /api/v1/chat/stream` | `POST /api/rag/document/stream` | `POST /api/v1/chat/stream` | SSE |
 | General chat | `POST /api/v1/general/stream` | `POST /api/rag/general/stream` | `POST /api/v1/general/stream` | SSE |
+| Select general answer | None | `POST /api/rag/general/answers/select` | `POST /api/v1/general/answers/select` | No |
 | List conversations | `GET /api/v1/history/sessions` | `GET /api/rag/history/sessions` | `GET /api/v1/history/sessions` | No |
 | Load conversation | `GET /api/v1/history/sessions/{id}` | `GET /api/rag/history/sessions/{id}` | `GET /api/v1/history/sessions/{id}` | No |
 | Delete conversation | `DELETE /api/v1/history/sessions/{id}` | `DELETE /api/rag/history/sessions/{id}` | `DELETE /api/v1/history/sessions/{id}` | No |
 | Save feedback | `PUT /api/v1/feedback/messages/{id}` | `PUT /api/rag/feedback/messages/{id}` | `PUT /api/v1/feedback/messages/{id}` | No |
+| Upload document | None | `POST /api/rag/documents/upload` | `POST /api/v1/documents/upload` | No |
 
-No document upload/list/delete endpoints were invented because the current UI does not call them.
+Document upload accepts one PDF through the established ingestion pipeline. No list, rename, or delete endpoint is added because no existing application contract requires one.
 
 ## Client and resilience
 

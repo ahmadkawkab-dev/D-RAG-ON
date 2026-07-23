@@ -39,6 +39,15 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
+
+class AnswerSelectionRequest(BaseModel):
+    generation_id: str = Field(min_length=1, max_length=128)
+    answer_id: str = Field(pattern="^answer_[ab]$")
+    session_id: str = Field(min_length=1, max_length=128)
+    reply_to_message_id: str = Field(min_length=1, max_length=128)
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
 class ChatResponse(BaseModel):
     session_id: str
     content: str

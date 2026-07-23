@@ -17,6 +17,7 @@ is not a browser authentication server.
 | `GET /api/auth/me` | JWT | Current application user |
 | `POST /api/auth/logout` | JWT/refresh cookie | Revoke refresh token |
 | `POST /api/rag/general/stream` | JWT, RAG limits | General SSE conversation |
+| `POST /api/rag/general/answers/select` | JWT, RAG limits | Persist a server-cached general-answer choice |
 | `POST /api/rag/document/stream` | JWT, RAG limits | Document-grounded SSE conversation |
 | `POST /api/rag/documents/upload` | JWT, RAG limits | Upload and index one PDF |
 | `GET /api/rag/history/sessions` | JWT, RAG limits | List owned sessions |
@@ -40,6 +41,7 @@ application-user header. They should be reachable only from .NET:
 | .NET route | Python destination |
 | --- | --- |
 | `/api/rag/general/stream` | `/api/v1/general/stream` |
+| `/api/rag/general/answers/select` | `/api/v1/general/answers/select` |
 | `/api/rag/document/stream` | `/api/v1/chat/stream` |
 | `/api/rag/documents/upload` | `/api/v1/documents/upload` |
 | `/api/rag/history/*` | `/api/v1/history/*` |

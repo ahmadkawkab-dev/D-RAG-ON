@@ -154,6 +154,77 @@
   .code-block pre {
     @apply overflow-x-auto p-4 font-mono text-sm leading-6;
   }
+
+  .dual-answer {
+    @apply w-full;
+  }
+
+  .dual-answer__header {
+    @apply mb-4 space-y-1;
+  }
+
+  .dual-answer__header h2 {
+    @apply text-base font-semibold tracking-tight;
+  }
+
+  .dual-answer__header p {
+    @apply text-sm text-muted-foreground;
+  }
+
+  .dual-answer__grid {
+    @apply grid grid-cols-2 items-start gap-4;
+  }
+
+  .dual-answer__grid--single {
+    @apply grid-cols-1;
+  }
+
+  .dual-answer__card {
+    @apply min-w-0 rounded-2xl border bg-card p-5 text-card-foreground shadow-sm transition;
+  }
+
+  .dual-answer__card--selected {
+    @apply border-primary ring-2 ring-primary/20;
+  }
+
+  .dual-answer__card--muted {
+    @apply opacity-50;
+  }
+
+  .dual-answer__card-header {
+    @apply mb-4 flex items-center justify-between gap-3;
+  }
+
+  .dual-answer__card-header h3 {
+    @apply text-sm font-semibold;
+  }
+
+  .dual-answer__selected-badge {
+    @apply shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary ring-1 ring-primary/20;
+  }
+
+  .dual-answer__streaming {
+    @apply mt-3 text-sm text-muted-foreground;
+  }
+
+  .dual-answer__select-button {
+    @apply mt-5 inline-flex w-full items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .dual-answer__answer-error {
+    @apply rounded-lg border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive;
+  }
+
+  .dual-answer__selection-error {
+    @apply mt-3 text-sm text-destructive;
+  }
+}
+
+
+@media (max-width: 800px) {
+  .dual-answer__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

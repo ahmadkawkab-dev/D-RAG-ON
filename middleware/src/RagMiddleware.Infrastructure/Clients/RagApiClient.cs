@@ -70,6 +70,17 @@ public sealed class RagApiClient(
         }
     }
 
+    public Task<ChatMessageResponse> SelectGeneralAnswerAsync(
+        GeneralAnswerSelectionRequest request,
+        string userId,
+        CancellationToken cancellationToken) =>
+        SendAsync<ChatMessageResponse>(
+            HttpMethod.Post,
+            "api/v1/general/answers/select",
+            userId,
+            request,
+            cancellationToken);
+
     public Task<IReadOnlyList<ChatSessionResponse>> ListSessionsAsync(
         string? mode,
         string userId,

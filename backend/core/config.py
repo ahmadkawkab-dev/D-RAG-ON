@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     general_web_cache_size: int = Field(default=128, ge=0, le=2048)
     general_web_cache_ttl_seconds: float = Field(default=120.0, ge=1.0, le=3600.0)
     ollama_api_key: SecretStr | None = None
+    general_dual_answer_enabled: bool = True
+    general_dual_answer_after_questions: int = Field(default=2, ge=0)
+    general_answer_choice_cache_size: int = Field(default=256, ge=1)
+    general_answer_choice_ttl_seconds: int = Field(default=900, ge=30)
 
     internal_api_key: SecretStr | None = None
     ollama_host: str = "http://localhost:11434"

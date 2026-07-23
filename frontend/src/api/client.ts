@@ -1,17 +1,19 @@
+import { apiBaseUrl } from '../config/environment'
 import type {
+  AnswerId,
   AuthSession,
   ChatMode,
   ChatSession,
   ChatSessionDetail,
   Citation,
   Feedback,
+  GeneralAnswerSelectionResponse,
   StreamCallbacks,
   TokenResponse,
   User,
 } from './types'
 
-const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:7187'
-export const API_BASE_URL = configuredBaseUrl.replace(/\/$/, '')
+export const API_BASE_URL = apiBaseUrl
 
 let accessToken: string | null = null
 
@@ -184,6 +186,26 @@ export async function saveFeedback(
   return response.json() as Promise<Feedback>
 }
 
+
+export async function selectGeneralAnswer(
+  sessionId: string,
+  replyToMessageId: string,
+  generationId: string,
+  answerId: AnswerId,
+): Promise<GeneralAnswerSelectionResponse> {
+  const response = await authorizedFetch('/api/rag/general/answers/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      reply_to_message_id: replyToMessageId,
+      generation_id: generationId,
+      answer_id: answerId,
+    }),
+  })
+  return response.json() as Promise<GeneralAnswerSelectionResponse>
+}
+
 type SseFrame = { event: string; data: string }
 
 function parseFrame(block: string): SseFrame | null {
@@ -230,24 +252,44 @@ export async function streamChat(
   const decoder = new TextDecoder()
   let buffer = ''
   let completed = false
+  let currentAnswerCount = 1
 
   const consume = (block: string) => {
     const frame = parseFrame(block)
     if (!frame) return
     const payload = JSON.parse(frame.data) as {
+      type?: string
       sources?: Citation[]
       mode?: 'fast' | 'complex'
       chat_mode?: ChatMode
       content?: string
       session_id?: string
-      message_id?: string
+      message_id?: string | null
       reply_to_message_id?: string
       version?: number
       web_enabled?: boolean
       detail?: string
+      error?: string
+      generation_id?: string
+      answer_id?: AnswerId
+      label?: string
+      answer_count?: number
+      available_answer_ids?: AnswerId[]
+      requires_selection?: boolean
     }
-    if (frame.event === 'metadata') callbacks.onMetadata(payload.sources ?? [])
-    if (frame.event === 'started' && payload.session_id) {
+
+    // Some Python SSE implementations send the event name in `type` while
+    // leaving the SSE event as the default "message". Support both shapes.
+    const eventName = frame.event === 'message' && payload.type
+      ? payload.type
+      : frame.event
+
+    if (eventName === 'metadata') {
+      currentAnswerCount = payload.answer_count ?? currentAnswerCount
+      callbacks.onMetadata(payload.sources ?? [])
+    }
+
+    if (eventName === 'started' && payload.session_id) {
       callbacks.onStarted({
         sessionId: payload.session_id,
         chatMode: payload.chat_mode ?? mode,
@@ -257,17 +299,103 @@ export async function streamChat(
         webEnabled: payload.web_enabled,
       })
     }
-    if (frame.event === 'delta') callbacks.onDelta(payload.content ?? '')
-    if (frame.event === 'done' && payload.session_id) {
+
+    if (eventName === 'delta') callbacks.onDelta(payload.content ?? '')
+
+    if (eventName === 'generation_start' && payload.generation_id) {
+      currentAnswerCount = payload.answer_count ?? currentAnswerCount
+
+      // Single-answer requests also emit lifecycle events. Only create the
+      // candidate-selection UI when the backend explicitly generates two.
+      if (currentAnswerCount > 1) {
+        callbacks.onGenerationStarted?.({
+          generationId: payload.generation_id,
+          answerCount: currentAnswerCount,
+          sources: payload.sources ?? [],
+        })
+      }
+    }
+
+    if (
+      eventName === 'answer_start'
+      && payload.generation_id
+      && payload.answer_id
+      && currentAnswerCount > 1
+    ) {
+      callbacks.onAnswerStarted?.({
+        generationId: payload.generation_id,
+        answerId: payload.answer_id,
+        label: payload.label ?? payload.answer_id,
+      })
+    }
+
+    if (
+      (eventName === 'answer_delta'
+        || eventName === 'candidate_delta'
+        || eventName === 'token')
+      && payload.generation_id
+      && payload.answer_id
+      && currentAnswerCount > 1
+    ) {
+      callbacks.onAnswerDelta?.({
+        generationId: payload.generation_id,
+        answerId: payload.answer_id,
+        label: payload.label ?? payload.answer_id,
+        content: payload.content ?? '',
+      })
+    }
+
+    if (
+      eventName === 'answer_done'
+      && payload.generation_id
+      && payload.answer_id
+      && currentAnswerCount > 1
+    ) {
+      callbacks.onAnswerDone?.({
+        generationId: payload.generation_id,
+        answerId: payload.answer_id,
+      })
+    }
+
+    if (
+      eventName === 'answer_error'
+      && payload.generation_id
+      && payload.answer_id
+      && currentAnswerCount > 1
+    ) {
+      callbacks.onAnswerError?.({
+        generationId: payload.generation_id,
+        answerId: payload.answer_id,
+        label: payload.label ?? payload.answer_id,
+        error: payload.error ?? payload.content ?? 'This answer could not be generated.',
+      })
+    }
+
+    if (
+      eventName === 'generation_done'
+      && payload.generation_id
+      && currentAnswerCount > 1
+    ) {
+      callbacks.onGenerationDone?.({
+        generationId: payload.generation_id,
+        availableAnswerIds: payload.available_answer_ids ?? [],
+      })
+    }
+
+    if (eventName === 'done' && payload.session_id) {
       completed = true
       callbacks.onDone({
         sessionId: payload.session_id,
-        messageId: payload.message_id ?? '',
+        messageId: payload.message_id ?? null,
         replyToMessageId: payload.reply_to_message_id ?? '',
         version: payload.version ?? 1,
+        requiresSelection: payload.requires_selection === true,
       })
     }
-    if (frame.event === 'error') throw new ApiError(payload.detail ?? 'The chat stream failed')
+
+    if (eventName === 'error') {
+      throw new ApiError(payload.detail ?? payload.error ?? 'The chat stream failed')
+    }
   }
 
   while (true) {
