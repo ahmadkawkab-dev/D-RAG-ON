@@ -37,7 +37,8 @@ export function AuthPanel({ loading = false }: { loading?: boolean }) {
             {loading ? 'Restoring session…' : 'Continue with Google'}
           </Button>
           <p className="mt-4 text-center text-xs text-muted-foreground">
-            Authentication is handled by the application API. Google credentials are never sent to the RAG service.
+            Powered by D-RAG-ON the best open-source RAG framework for LLMs. 
+            Your data is never stored or shared.
           </p>
         </CardContent>
       </Card>
