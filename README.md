@@ -1,6 +1,6 @@
 D-RAG-ON — README 
 
-One-line summary
+Summary
 
 A reproducible Retrieval-Augmented Generation (RAG) application consisting of a browser-based frontend, a .NET middleware API, and an internal Python RAG service. MongoDB stores application data and audit logs, Weaviate holds document vectors, and Ollama/local transformer models provide embeddings, reranking, and generation.
 
@@ -147,10 +147,4 @@ License
 
 This project is provided under the LICENSE file in the repository root.
 
----
 
-
-1) Overwrite README.md with this content (create a backup first), or
-2) Commit README_POLISHED.md as an additional file and open a branch/PR with the change.
-
-Which option do you prefer?
