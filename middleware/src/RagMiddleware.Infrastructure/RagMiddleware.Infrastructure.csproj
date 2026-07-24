@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RagMiddleware.Application\RagMiddleware.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.2" />
+  </ItemGroup>
+</Project>

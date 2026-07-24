@@ -14,5 +14,14 @@ services:
       - weaviate_data:/var/lib/weaviate
     restart: on-failure:0
 
+  mongodb:
+    image: mongo:8.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
 volumes:
   weaviate_data:
+  mongodb_data:

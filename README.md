@@ -1,187 +1,156 @@
-# RAG Setup — Internal Ship Program
+D-RAG-ON — README 
 
-Starter project for the **Internal Ship Program** RAG track. It gives you a ready-to-run
-environment for building a Retrieval-Augmented Generation (RAG) system with the
-**LangChain ecosystem** and **local open-source models** — no API keys, your data never
-leaves the machine.
+One-line summary
 
-The teaching notebook walks through the **ingestion** half of a RAG pipeline on a real
-document (CIS Controls v8) across four stages:
+A reproducible Retrieval-Augmented Generation (RAG) application consisting of a browser-based frontend, a .NET middleware API, and an internal Python RAG service. MongoDB stores application data and audit logs, Weaviate holds document vectors, and Ollama/local transformer models provide embeddings, reranking, and generation.
 
-```
-PDF → 2.1 Parse → 2.2 Chunk → 2.3 Embed → 2.4 Store → (later: retrieve → rerank → agent)
-        unstructured   splitters   bge-small   Weaviate
-```
+Why this repo
 
-| Stage | What it does | Tool |
-|-------|--------------|------|
-| **2.1 Parse** | Extract text, tables, and images from the PDF | `langchain-unstructured` (`hi_res`) |
-| **2.2 Chunk** | Split into retrieval-sized pieces (char / token / by-title) | `langchain-text-splitters` |
-| **2.3 Embed** | Turn chunks into vectors, locally on CPU | `BAAI/bge-small-en-v1.5` |
-| **2.4 Store** | Save vectors in a DB you can search by similarity | `langchain-weaviate` + Weaviate |
+This project demonstrates a production-oriented RAG architecture with clear separation between browser, middleware, and internal AI services. It includes ingestion tools, parsing utilities, evaluation tooling, and a developer-focused operations console.
 
-## Prerequisites
+Repository layout (important folders)
 
-Make sure the following are installed **before** you start.
+- backend/ and backend.main — Python FastAPI internal RAG service
+- middleware/ — .NET middleware (browser-facing API)
+- frontend/ — Browser UI
+- ingestion/, parse.py, parsing_workspace.py — document parsing & ingestion utilities
+- docker-compose.yml — MongoDB and Weaviate definitions used for local development
+- pyproject.toml — Python dependency manifest
+- launch_walkthrough.md — step-by-step launch guide (created separately)
 
-### 1. Python 3.12+
+Architecture (high level)
 
-This project requires Python **3.12 or newer** (see `requires-python` in `pyproject.toml`).
+Browser → .NET Middleware → Python RAG Service
+                                 ├── MongoDB (persistence)
+                                 └── Weaviate / local models
 
-### 2. uv (Python package/environment manager)
+Security note: The internal Python service is only intended to be reachable by the middleware. An internal API key protects the internal endpoints; do not expose the Python service publicly.
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install it once:
+Prerequisites
 
-```bash
-# Linux / macOS / WSL
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Install the following tools on your development machine:
 
-uv reads `pyproject.toml` + `uv.lock` and creates an isolated `.venv` for you — you don't
-need to manage virtualenvs or `pip` by hand.
+- .NET SDK 10
+- Python 3.12+
+- Node.js (LTS) and npm
+- Docker Engine and Docker Compose (either `docker compose` plugin or `docker-compose`)
+- Ollama (optional, for local model hosting)
+- Poppler utilities & Tesseract for PDF parsing (Linux/WSL):
+  sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr libgl1
 
-### 3. System packages for hi-res PDF parsing
+Tip: Heavy Python dependencies (torch, transformers, sentence-transformers) can be slow to install and may require significant disk/RAM. For GPU acceleration, install matching CUDA drivers and a GPU-enabled torch build.
 
-`unstructured` uses OCR and a layout model to detect tables and images. Install these
-system libraries (Debian / Ubuntu / WSL):
+Quickstart — launch locally (copy-paste)
 
-```bash
-sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr libgl1
-```
+1) Clone the repository and cd into the project root:
 
-| Package | Why it's needed |
-|---------|-----------------|
-| `poppler-utils` | renders PDF pages to images |
-| `tesseract-ocr` | reads text from those images (OCR) |
-| `libgl1` | shared library the layout/vision model needs |
+   git clone <repo-url>
+   cd D-RAG-ON/D-RAG-ON
 
-> On macOS use Homebrew instead: `brew install poppler tesseract`.
+2) Create a local .env and set the internal API key (keep secret):
 
-### 4. Docker (for Weaviate, recommended)
+   cp .env.example .env
+   RKEY=$(openssl rand -hex 24)
+   sed -i "s/^RAG_INTERNAL_API_KEY=.*/RAG_INTERNAL_API_KEY=$RKEY/" .env
 
-The vector database stage uses **Weaviate**. Running it in Docker is the recommended path
-(an embedded fallback exists, but Docker is more reliable). Install
-[Docker](https://docs.docker.com/get-docker/), then start Weaviate:
+3) Start infrastructure services (MongoDB and Weaviate):
 
-```bash
-docker run -p 8080:8080 -p 50051:50051 cr.weaviate.io/semitechnologies/weaviate:1.27.0
-```
+   # If your Docker supports the compose plugin:
+   docker compose up -d mongodb weaviate
 
-## Setup
+   # Or with the standalone binary:
+   docker-compose up -d mongodb weaviate
 
-From the `rag_setup/` directory:
+   docker ps  # verify services are running
 
-```bash
-# 1. Install Python dependencies into an isolated .venv
-uv sync
+4) Prepare Python environment and install dependencies:
 
-# 2. Launch Jupyter
-uv run jupyter lab        # or: uv run jupyter notebook
-```
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python -m pip install --upgrade pip
+   python -m pip install -e .
 
-Open [`notebooks/01_RAG_setup.ipynb`](notebooks/01_RAG_setup.ipynb), select this project's
-`.venv` as the kernel, and run the cells top to bottom.
+5) Start the internal Python RAG service (FastAPI):
 
-> **First run is slow (one-time):** it downloads the embedding model (~130 MB) and the
-> layout model, and `hi_res` parsing of the full PDF takes a few minutes on CPU. Everything
-> is cached afterward.
+   # If 'uv' CLI is available:
+   uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-## Optional MinerU2.5 visual parsing
+   # Or with uvicorn directly:
+   python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
-PyMuPDF remains the authoritative parser and its existing chunks are never
-replaced. MinerU2.5 can be enabled as a second, visual pass that adds
-provenance-marked supplement chunks for difficult pages such as image-heavy
-content and CIS summary tables.
+   # Verify OpenAPI (internal only): http://localhost:8000/docs
 
-Install the optional runtime:
+6) Configure and run the .NET middleware (ensure secrets match):
 
-```bash
-uv sync --extra mineru
-```
+   # Required environment variables (examples):
+   export MongoDb__ConnectionString="mongodb://localhost:27017"
+   export MongoDb__DatabaseName="rag_app"
+   export RagApi__ApiKey="$RKEY"  # must equal RAG_INTERNAL_API_KEY in .env
 
-Run selective assistance (recommended):
+   dotnet run --project middleware/src/RagMiddleware.Api
 
-```bash
-uv run python main.py ingest data/document.pdf \
-  --mineru-mode selective \
-  --mineru-device auto \
-  --mineru-max-pages 12 \
-  --save-jsonl generated_chunks
-```
+   # Middleware Swagger UI: https://localhost:<middleware-port>/swagger (Development)
 
-Use `--mineru-pages 4,9-12` to force specific one-based pages or
-`--mineru-mode all` for every page. Results are cached under
-`.mineru_cache/`. The model is loaded lazily and explicitly unloaded before
-EmbeddingGemma starts, so the two models do not intentionally share accelerator
-memory.
+7) Frontend (browser):
 
-The supported default is the official
-`opendatalab/MinerU2.5-2509-1.2B` model (not a 0.9B release). Its first use
-downloads the weights. Review the model's AGPL-3.0 license before redistribution
-or deployment.
+   cd frontend
+   npm install
+   npm run dev
 
-## Project layout
+   # Open the URL shown by the dev server (commonly http://localhost:3000)
 
-```
-rag_setup/
-├── data/                        # CIS Controls v8 PDF (sample document)
-├── notebooks/
-│   └── 01_RAG_setup.ipynb       # ingestion pipeline walkthrough
-├── parsing_workspace.py         # upload/configure/review/export Streamlit UI
-├── json_review_workspace.py     # JSON/JSONL golden-candidate quality gate
-├── dashboard.py                 # complete RAG operations console
-├── parse.py                     # authoritative PyMuPDF parser and chunker
-├── main.py                      # ingestion, query, and evaluation CLI
-├── pyproject.toml               # dependencies + Python version
-└── uv.lock                      # pinned dependency versions
-```
+Health checks and tests
 
-## RAG operations console
+- Python internal service: http://localhost:8000/health and /health/ready
+- Middleware: /health and /swagger (in Development)
 
-Start the complete local UI:
+Automated checks (recommended):
 
-```bash
-uv run streamlit run app.py
-```
+   dotnet test middleware/RagMiddleware.sln
+   uv run pytest -q
+   cd frontend && npm run lint && npm run build
 
-The responsive console provides Ask, Evaluate, Documents, Golden Set, and Runs workspaces through a horizontally scrollable section rail. A compact top-left system dock reports CPU/RAM/disk/GPU and local-service health, while the warm beige/ivory/indigo interface follows a 60–30–10 visual balance.
+Optional integration tests (service-backed):
 
-In **Evaluate → Review JSON candidates**, upload JSON or JSONL candidate records. The in-session review normalizes common field names, checks duplicates, frozen-corpus alignment, stable chunk IDs, and answer support, then recommends **Ready to add**, **Human review**, or **Do not add**. Nothing enters the golden set without explicit human confirmation.
+   RUN_LIVE_RAG_TESTS=1 uv run pytest -q tests/backend/test_live_integration.py
 
-In **Document studio → Parse & review**, upload multiple PDFs, adjust
-`PipelineConfig` in the sidebar, and follow five measured parser stages. Each
-stage exposes timing, strategy settings, inputs, counts, and outputs—including
-extracted lines/characters, boilerplate patterns, heading tiers, table annotations,
-final chunks, and token statistics. The chunk browser includes token and character
-counts, page coverage, implementation groups, text previews, complete metadata,
-canonical JSONL, and a downloadable processing manifest. Results remain in session
-memory and expensive parses are cached by PDF content and configuration.
+Environment variables reference (selected)
 
-Background ingestion and evaluation runs expose the same structured run reporting
-under **Runs**, including model/configuration choices, stage progress, indexed chunk
-and token totals, output artifact paths, and downloadable JSON reports.
+- RAG_INTERNAL_API_KEY — internal API key used by the middleware to call Python service (keep secret)
+- RAG_MONGODB_URI — e.g. mongodb://localhost:27017
+- RAG_MONGODB_DATABASE — e.g. rag_app
+- RAG_WEAVIATE_HOST — weaviate host (default localhost)
+- RAG_OLLAMA_HOST — Ollama host if using Ollama models
+- RAG_EMBEDDING_MODEL, RAG_ANSWER_MODEL, RAG_GENERAL_CHAT_MODEL — model names used by the Python service
 
-Interactive questions use a resident, serialized query engine. It keeps the
-embedding client and lightweight 0.6B reranker warm, bypasses reranking for
-high-confidence exact clause lookups, and streams Ollama answer tokens into the
-chat-style Streamlit interface. Larger 4B reranking remains an adaptive fallback
-for uncertain or multi-evidence questions. Completed responses are cached
-locally for 24 hours, so an identical normalized question with identical settings
-can return immediately. High-confidence paraphrases can reuse a cached response
-after one query embedding, with clause-number and similarity safeguards.
-Related-topic questions receive a newly generated answer but stay on the fast
-0.6B path. Slow 4B escalation is opt-in for interactive chat and remains enabled
-as the evaluation quality reference.
+Operational notes
+
+- The Python API is internal and must not be exposed publicly. The middleware is the only browser-facing layer.
+- Document upload endpoints strictly validate file type/size (PDF only, max 10 MiB) and protect original contents from being logged.
+- Use Docker Compose volumes to persist Weaviate and MongoDB data between runs.
+
+Troubleshooting
+
+- "docker compose" not found: install the Docker Compose plugin or the standalone `docker-compose` binary.
+- dotnet not installed: install .NET SDK 10.
+- uv CLI missing: use `python -m uvicorn` to run the Python service.
+- npm missing: install Node.js with npm or use nvm.
+- Python packages failing to install (torch/transformers): consider installing CPU-only torch or follow platform-specific install docs for CUDA.
+
+Developer & contribution notes
+
+- The repo includes ingestion tooling, notebooks, and evaluation scripts. See `parse.py`, `main.py`, `ingestion/` and `notebooks/` for developer utilities.
+- Please do not check secrets into source control. Use environment variables or OS-level secret storage.
 
 
-Rebuild the parser-aligned safe evaluation set with:
+License
 
-```bash
-uv run python -m scripts.golden_dataset_tools optimize golden_dataset.jsonl data/CIS_Controls__v8__Critical_Security_Controls__2023_08.pdf -o golden_dataset.optimized.jsonl
-```
+This project is provided under the LICENSE file in the repository root.
 
-## FastAPI and React readiness
+---
 
-The RAG services can support a React, Vite, and Tailwind CSS frontend while Streamlit remains the operations console. See [FastAPI and Frontend Readiness](docs/FASTAPI_FRONTEND_READINESS.md) for the API boundaries, job model, security controls, endpoint plan, and rollout checklist.
 
-See the [RAG roadmap](docs/RAG_ROADMAP.md) for the recommended quality, efficiency, and functionality plan.
+1) Overwrite README.md with this content (create a backup first), or
+2) Commit README_POLISHED.md as an additional file and open a branch/PR with the change.
+
+Which option do you prefer?

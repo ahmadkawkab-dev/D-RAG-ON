@@ -10,6 +10,10 @@ dist/
 *.egg
 .eggs/
 
+# .NET build output
+bin/
+obj/
+
 # Virtual environments
 .venv/
 venv/
@@ -24,6 +28,8 @@ ENV/
 .env.*
 !.env.example
 *.key
+appsettings.Development.json
+secrets.json
 
 # Frontend dependencies and Vite output
 node_modules/
@@ -65,7 +71,7 @@ vector_store/
 *.sqlite
 *.sqlite3
 *.db
-models/
+/models/
 *.bin
 *.gguf
 .mineru_cache/
